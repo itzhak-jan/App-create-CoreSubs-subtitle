@@ -5,12 +5,12 @@ import {
   TouchableOpacity,
   StyleSheet,
   Alert,
-  Platform,
 } from 'react-native';
 import DocumentPicker, {types} from 'react-native-document-picker';
 import {
   check,
   request,
+  openSettings,
   PERMISSIONS,
   RESULTS,
 } from 'react-native-permissions';
@@ -19,18 +19,46 @@ import {useSubtitleStore} from '../../store/subtitleStore';
 import {jitProcessor} from '../../services/JITProcessor';
 import {cleanAllChunks} from '../../services/ChunkExtractor';
 
-async function ensureStoragePermission(): Promise<boolean> {
-  // Android 13+ uses READ_MEDIA_VIDEO; earlier versions use READ_EXTERNAL_STORAGE
-  const permission =
-    Platform.Version >= 33
-      ? PERMISSIONS.ANDROID.READ_MEDIA_VIDEO
-      : PERMISSIONS.ANDROID.READ_EXTERNAL_STORAGE;
+/**
+ * Requests READ_MEDIA_VIDEO (API 33+).
+ *
+ * On API < 33 the permission does not exist (RESULTS.UNAVAILABLE).
+ * DocumentPicker's copyTo:'cachesDirectory' option copies the picked file
+ * into the app's private cache using the system's file picker UI, so no
+ * runtime permission is needed on those older versions.
+ *
+ * READ_EXTERNAL_STORAGE is intentionally NOT requested — on API 33+ the
+ * system denies it at runtime, and on API 29-32 it is unnecessary when
+ * using content:// URIs from DocumentPicker.
+ */
+async function ensureVideoReadPermission(): Promise<boolean> {
+  const permission = PERMISSIONS.ANDROID.READ_MEDIA_VIDEO;
+  const status = await check(permission);
 
-  let status = await check(permission);
-  if (status === RESULTS.DENIED) {
-    status = await request(permission);
+  switch (status) {
+    case RESULTS.GRANTED:
+    case RESULTS.LIMITED:
+      return true;
+
+    case RESULTS.DENIED:
+      return (await request(permission)) === RESULTS.GRANTED;
+
+    case RESULTS.BLOCKED:
+      Alert.alert(
+        'Permission blocked',
+        'Video access was permanently denied. Open Settings → Apps → CoreSubs → Permissions and enable "Photos & Videos".',
+        [
+          {text: 'Cancel', style: 'cancel'},
+          {text: 'Open Settings', onPress: openSettings},
+        ],
+      );
+      return false;
+
+    case RESULTS.UNAVAILABLE:
+    default:
+      // API < 33: READ_MEDIA_VIDEO does not exist; proceed without it.
+      return true;
   }
-  return status === RESULTS.GRANTED;
 }
 
 export function FilePicker(): React.JSX.Element {
@@ -38,7 +66,7 @@ export function FilePicker(): React.JSX.Element {
   const {reset: resetSubtitles} = useSubtitleStore();
 
   const pickVideo = async () => {
-    const granted = await ensureStoragePermission();
+    const granted = await ensureVideoReadPermission();
     if (!granted) {
       Alert.alert(
         'Permission required',
