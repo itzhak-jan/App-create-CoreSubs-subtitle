@@ -1,41 +1,48 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("coresubs_jni")
 
-# ── Conditional whisper.cpp integration ──────────────────────────────────────
+# ── whisper.cpp integration ───────────────────────────────────────────────────
 #
-# A full device build requires two files that are NOT committed to the repo
-# (too large for git / platform-specific binaries):
-#   android/app/src/main/jniLibs/arm64-v8a/libwhisper.so
-#   android/app/src/main/cpp/whisper.h
+# CI and production builds: whisper.cpp source is cloned to whisper_src/ by the
+# GitHub Actions workflow (cached by tag). CMake compiles whisper + GGML as
+# static libraries via add_subdirectory and links them into libwhisper_jni.so —
+# a single self-contained shared library that ships in the APK.
 #
-# When these are absent (CI, fresh clone), the build falls back to a stub that
-# satisfies the JNI contract and links cleanly. WhisperModule.kt already handles
-# ctxPtr == 0 by returning empty transcription results, so the app remains
-# fully functional in that mode (subtitles simply stay empty).
+# Local dev without the source clone falls back to a do-nothing stub so the
+# project still builds. WhisperModule.kt returns empty results when ctxPtr == 0.
 #
-# To produce a production build with real STT:
-#   1. Build whisper.cpp for arm64-v8a:
-#        git clone https://github.com/ggerganov/whisper.cpp
-#        cd whisper.cpp && cmake -B build/android -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake \
-#          -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DWHISPER_BUILD_TESTS=OFF
-#        cmake --build build/android --target whisper -j4
-#   2. Copy outputs:
-#        build/android/src/libwhisper.so  → android/app/src/main/jniLibs/arm64-v8a/
-#        whisper.h                        → android/app/src/main/cpp/
+# To get full STT locally (without CI):
+#   git clone --depth=1 --branch v1.7.4 \
+#     https://github.com/ggerganov/whisper.cpp.git \
+#     android/app/src/main/cpp/whisper_src
 
-set(WHISPER_SO   "${CMAKE_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/libwhisper.so")
-set(WHISPER_H    "${CMAKE_SOURCE_DIR}/whisper.h")
+set(WHISPER_SRC_DIR "${CMAKE_SOURCE_DIR}/whisper_src")
 
-if(EXISTS "${WHISPER_SO}" AND EXISTS "${WHISPER_H}")
-    message(STATUS "[CoreSubs] whisper.cpp found — building full JNI bridge")
+if(EXISTS "${WHISPER_SRC_DIR}/CMakeLists.txt")
+    message(STATUS "[CoreSubs] whisper.cpp source found — compiling from source")
 
-    add_library(whisper SHARED IMPORTED)
-    set_target_properties(whisper PROPERTIES IMPORTED_LOCATION "${WHISPER_SO}")
+    # Disable unnecessary whisper.cpp sub-targets to keep build fast.
+    set(GGML_METAL        OFF CACHE BOOL "" FORCE)
+    set(GGML_CUDA         OFF CACHE BOOL "" FORCE)
+    set(GGML_OPENCL       OFF CACHE BOOL "" FORCE)
+    set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    # Static libraries get linked into libwhisper_jni.so — no separate .so needed.
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
+    add_subdirectory(${WHISPER_SRC_DIR} whisper_build EXCLUDE_FROM_ALL)
 
     add_library(whisper_jni SHARED whisper_jni.cpp)
 
     target_compile_definitions(whisper_jni PRIVATE WHISPER_AVAILABLE=1)
-    target_include_directories(whisper_jni PRIVATE ${CMAKE_SOURCE_DIR})
+
+    # whisper.cpp v1.6+ moved whisper.h to include/; older tags keep it at root.
+    # List both so we resolve correctly regardless of exact tag layout.
+    target_include_directories(whisper_jni PRIVATE
+        "${WHISPER_SRC_DIR}/include"
+        "${WHISPER_SRC_DIR}"
+        "${WHISPER_SRC_DIR}/ggml/include"
+    )
 
     target_link_libraries(whisper_jni whisper android log)
 
@@ -45,10 +52,11 @@ if(EXISTS "${WHISPER_SO}" AND EXISTS "${WHISPER_H}")
         -march=armv8.4-a+dotprod+fp16
         -ffast-math
     )
+
 else()
-    message(STATUS "[CoreSubs] whisper.so not found — building stub (CI mode)")
+    message(STATUS "[CoreSubs] whisper_src not found — building stub (local dev)")
 
     add_library(whisper_jni SHARED whisper_jni.cpp)
-    # No WHISPER_AVAILABLE — stub path compiled
+    # No WHISPER_AVAILABLE — stub path compiled; ctxPtr == 0 at runtime
     target_link_libraries(whisper_jni android log)
 endif()
