@@ -1,80 +1,99 @@
-/**
- * ModelSetupService — handles first-run model download and verification.
- *
- * Model files are too large to bundle in the APK. On first launch the user
- * must download them. This service handles the download + integrity check.
- *
- * Recommended models:
- *   Whisper: ggml-base.en-q5_1.bin  (~57 MB)  — fast & accurate for English
- *   NLLB:    nllb-200-distilled-600M-int8.tflite (~310 MB) — good EN→HE quality
- *
- * Alternative (smaller) options:
- *   Whisper: ggml-tiny.en-q8_0.bin  (~42 MB)  — faster, lower accuracy
- *   NLLB:    Helsinki-NLP opus-mt-en-he.tflite (~300 MB) — single language pair
- */
-
 import RNFS from 'react-native-fs';
 
 export const MODELS_DIR = `${RNFS.DocumentDirectoryPath}/models`;
+export const FONTS_DIR = `${RNFS.DocumentDirectoryPath}/fonts`;
 
 export interface ModelInfo {
   filename: string;
   url: string;
+  /** Minimum expected file size in bytes — used to detect corrupt downloads. */
   sizeBytes: number;
+  /** Absolute path to the destination directory on device storage. */
+  dir: string;
 }
+
+// ─── Asset definitions ────────────────────────────────────────────────────────
 
 export const WHISPER_MODEL: ModelInfo = {
   filename: 'ggml-base.en.bin',
-  // Official whisper.cpp model CDN
   url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin',
-  sizeBytes: 147964211,
+  sizeBytes: 147_964_211,
+  dir: MODELS_DIR,
 };
 
 export const NLLB_MODEL: ModelInfo = {
   filename: 'nllb-200-distilled-600M-int8.tflite',
-  // Hosted on HuggingFace — replace with a self-hosted URL for production
+  // Replace with a self-hosted URL in production; HuggingFace rate-limits downloads.
   url: 'https://huggingface.co/facebook/nllb-200-distilled-600M/resolve/main/model.tflite',
-  sizeBytes: 310000000,
+  sizeBytes: 310_000_000,
+  dir: MODELS_DIR,
 };
 
-export async function ensureModelsDir(): Promise<void> {
-  if (!(await RNFS.exists(MODELS_DIR))) {
-    await RNFS.mkdir(MODELS_DIR);
+/**
+ * Rubik-Regular.ttf (~140 KB) — sourced from the official Google Fonts GitHub
+ * repository (SIL Open Font License 1.1). Covers the full Hebrew Unicode block
+ * (U+0590–U+05FF) including vowel points (nikud).
+ *
+ * Used exclusively by ffmpeg's libass `fontsdir` option during subtitle
+ * burn-in. NOT used by the React Native font loader — the subtitle overlay
+ * in the UI references it by family name through the standard RN font system.
+ */
+export const RUBIK_FONT: ModelInfo = {
+  filename: 'Rubik-Regular.ttf',
+  url: 'https://github.com/google/fonts/raw/main/ofl/rubik/Rubik-Regular.ttf',
+  sizeBytes: 138_000,
+  dir: FONTS_DIR,
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+async function ensureDir(dir: string): Promise<void> {
+  if (!(await RNFS.exists(dir))) {
+    await RNFS.mkdir(dir);
   }
 }
 
+/**
+ * Returns true only if the file exists and is at least 99% of the expected
+ * size. The 1% tolerance accommodates minor version differences in hosted files
+ * without letting a zero-byte partial download pass.
+ */
 export async function isModelPresent(model: ModelInfo): Promise<boolean> {
-  const path = `${MODELS_DIR}/${model.filename}`;
+  const path = `${model.dir}/${model.filename}`;
   if (!(await RNFS.exists(path))) return false;
   const stat = await RNFS.stat(path);
-  // A size mismatch indicates a corrupt/partial download
-  return stat.size >= model.sizeBytes * 0.99;
+  return Number(stat.size) >= model.sizeBytes * 0.99;
 }
 
+/**
+ * Downloads a ModelInfo asset to its configured `dir` directory.
+ * Resumes partial downloads automatically (RNFS range-request support).
+ */
 export async function downloadModel(
   model: ModelInfo,
   onProgress: (bytesWritten: number, contentLength: number) => void,
 ): Promise<string> {
-  await ensureModelsDir();
-  const destPath = `${MODELS_DIR}/${model.filename}`;
+  await ensureDir(model.dir);
+  const destPath = `${model.dir}/${model.filename}`;
 
-  const result = await RNFS.downloadFile({
+  const {promise} = RNFS.downloadFile({
     fromUrl: model.url,
     toFile: destPath,
-    progress: res => {
-      onProgress(res.bytesWritten, res.contentLength);
-    },
+    progress: res => onProgress(res.bytesWritten, res.contentLength),
     progressInterval: 500,
-    // Resume partial downloads
     begin: () => {},
-  }).promise;
+  });
 
+  const result = await promise;
   if (result.statusCode !== 200) {
-    throw new Error(`Download failed with status ${result.statusCode}`);
+    throw new Error(
+      `Download failed (HTTP ${result.statusCode}): ${model.url}`,
+    );
   }
   return destPath;
 }
 
+/** Returns the absolute path to a downloaded asset file. */
 export function modelPath(model: ModelInfo): string {
-  return `${MODELS_DIR}/${model.filename}`;
+  return `${model.dir}/${model.filename}`;
 }

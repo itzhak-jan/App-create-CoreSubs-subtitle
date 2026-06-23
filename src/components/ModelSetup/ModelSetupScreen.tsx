@@ -1,8 +1,15 @@
 /**
- * ModelSetupScreen — shown on first launch when AI models aren't downloaded.
+ * ModelSetupScreen — first-launch onboarding screen.
  *
- * Downloads whisper.cpp and NLLB models to DocumentDirectory.
- * This screen is only shown once; subsequent launches go directly to FilePicker.
+ * Downloads all three runtime assets to DocumentDirectory:
+ *   1. ggml-base.en.bin      — Whisper STT model  (~148 MB)
+ *   2. nllb-200-…int8.tflite — NLLB translation    (~310 MB)
+ *   3. Rubik-Regular.ttf     — Hebrew font for export (~140 KB)
+ *
+ * None of these are bundled in the APK. Downloading at runtime keeps the
+ * repository and CI artefacts lightweight. The screen is shown exactly once;
+ * App.tsx checks asset presence on every launch and skips setup if all three
+ * files are already present and correctly sized.
  */
 import React, {useState, useCallback} from 'react';
 import {
@@ -10,20 +17,26 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  Alert,
   ScrollView,
 } from 'react-native';
 import {
   WHISPER_MODEL,
   NLLB_MODEL,
+  RUBIK_FONT,
   downloadModel,
   isModelPresent,
-  ModelInfo,
+  type ModelInfo,
 } from '../../services/ModelSetupService';
 
-type DownloadPhase = 'idle' | 'downloading_whisper' | 'downloading_nllb' | 'done' | 'error';
+type DownloadPhase =
+  | 'idle'
+  | 'downloading_whisper'
+  | 'downloading_nllb'
+  | 'downloading_font'
+  | 'done'
+  | 'error';
 
-interface ModelProgress {
+interface AssetProgress {
   bytes: number;
   total: number;
 }
@@ -32,81 +45,141 @@ interface ModelSetupScreenProps {
   onComplete: () => void;
 }
 
-function formatMB(bytes: number): string {
-  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
-}
-
-function ProgressBar({progress}: {progress: number}): React.JSX.Element {
+function ProgressBar({ratio}: {ratio: number}): React.JSX.Element {
   return (
     <View style={styles.progressTrack}>
-      <View style={[styles.progressFill, {width: `${Math.min(100, progress * 100)}%`}]} />
+      <View
+        style={[
+          styles.progressFill,
+          {width: `${Math.min(100, ratio * 100)}%`},
+        ]}
+      />
+    </View>
+  );
+}
+
+function AssetRow({
+  label,
+  description,
+  progress,
+  active,
+}: {
+  label: string;
+  description: string;
+  progress: AssetProgress;
+  active: boolean;
+}): React.JSX.Element {
+  const ratio = progress.total > 0 ? progress.bytes / progress.total : 0;
+  const done = ratio >= 0.999;
+
+  return (
+    <View style={styles.assetRow}>
+      <View style={styles.assetHeader}>
+        <Text style={styles.assetLabel}>{label}</Text>
+        {done && <Text style={styles.checkmark}>✓</Text>}
+        {active && !done && <Text style={styles.activeLabel}>Downloading…</Text>}
+      </View>
+      <Text style={styles.assetDesc}>{description}</Text>
+      <ProgressBar ratio={ratio} />
     </View>
   );
 }
 
 export function ModelSetupScreen({onComplete}: ModelSetupScreenProps): React.JSX.Element {
   const [phase, setPhase] = useState<DownloadPhase>('idle');
-  const [whisperProg, setWhisperProg] = useState<ModelProgress>({bytes: 0, total: WHISPER_MODEL.sizeBytes});
-  const [nllbProg, setNllbProg] = useState<ModelProgress>({bytes: 0, total: NLLB_MODEL.sizeBytes});
   const [errorMsg, setErrorMsg] = useState('');
 
+  const [whisperProg, setWhisperProg] = useState<AssetProgress>({
+    bytes: 0,
+    total: WHISPER_MODEL.sizeBytes,
+  });
+  const [nllbProg, setNllbProg] = useState<AssetProgress>({
+    bytes: 0,
+    total: NLLB_MODEL.sizeBytes,
+  });
+  const [fontProg, setFontProg] = useState<AssetProgress>({
+    bytes: 0,
+    total: RUBIK_FONT.sizeBytes,
+  });
+
+  const downloadAsset = useCallback(
+    async (
+      model: ModelInfo,
+      phaseLabel: DownloadPhase,
+      setProgress: (p: AssetProgress) => void,
+    ) => {
+      const present = await isModelPresent(model);
+      if (present) {
+        setProgress({bytes: model.sizeBytes, total: model.sizeBytes});
+        return;
+      }
+      setPhase(phaseLabel);
+      await downloadModel(model, (bytes, contentLength) =>
+        setProgress({
+          bytes,
+          total: contentLength > 0 ? contentLength : model.sizeBytes,
+        }),
+      );
+      // Mark as fully complete regardless of reported contentLength
+      setProgress({bytes: model.sizeBytes, total: model.sizeBytes});
+    },
+    [],
+  );
+
   const downloadAll = useCallback(async () => {
+    setErrorMsg('');
     try {
-      // Whisper
-      const whisperPresent = await isModelPresent(WHISPER_MODEL);
-      if (!whisperPresent) {
-        setPhase('downloading_whisper');
-        await downloadModel(WHISPER_MODEL, (b, t) =>
-          setWhisperProg({bytes: b, total: t > 0 ? t : WHISPER_MODEL.sizeBytes}),
-        );
-      } else {
-        setWhisperProg(p => ({...p, bytes: p.total}));
-      }
-
-      // NLLB
-      const nllbPresent = await isModelPresent(NLLB_MODEL);
-      if (!nllbPresent) {
-        setPhase('downloading_nllb');
-        await downloadModel(NLLB_MODEL, (b, t) =>
-          setNllbProg({bytes: b, total: t > 0 ? t : NLLB_MODEL.sizeBytes}),
-        );
-      } else {
-        setNllbProg(p => ({...p, bytes: p.total}));
-      }
-
+      await downloadAsset(WHISPER_MODEL, 'downloading_whisper', setWhisperProg);
+      await downloadAsset(NLLB_MODEL, 'downloading_nllb', setNllbProg);
+      await downloadAsset(RUBIK_FONT, 'downloading_font', setFontProg);
       setPhase('done');
       onComplete();
     } catch (e) {
       setPhase('error');
       setErrorMsg(String(e));
     }
-  }, [onComplete]);
+  }, [downloadAsset, onComplete]);
 
-  const isActive = phase !== 'idle' && phase !== 'done' && phase !== 'error';
+  const isActive =
+    phase === 'downloading_whisper' ||
+    phase === 'downloading_nllb' ||
+    phase === 'downloading_font';
+
+  const btnLabel =
+    phase === 'idle'
+      ? 'Download & Continue'
+      : phase === 'error'
+        ? 'Retry'
+        : 'Downloading…';
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.logo}>CoreSubs</Text>
       <Text style={styles.title}>First-Time Setup</Text>
       <Text style={styles.subtitle}>
-        CoreSubs uses on-device AI models — nothing leaves your phone.{'\n'}
-        Download them once (approx. 460 MB total).
+        All AI processing runs entirely on-device.{'\n'}
+        Download the models once — nothing leaves your phone.
       </Text>
 
-      {/* Whisper model */}
-      <ModelRow
+      <AssetRow
         label="Whisper STT"
-        description="Speech-to-text • ggml-base.en-q5 (~57 MB)"
-        progress={whisperProg.bytes / whisperProg.total}
+        description="Speech-to-text model  •  ggml-base.en  •  ~148 MB"
+        progress={whisperProg}
         active={phase === 'downloading_whisper'}
       />
 
-      {/* NLLB model */}
-      <ModelRow
+      <AssetRow
         label="NLLB Translation"
-        description="English → Hebrew • INT8 quantized (~310 MB)"
-        progress={nllbProg.bytes / nllbProg.total}
+        description="English → Hebrew  •  INT8 quantized  •  ~310 MB"
+        progress={nllbProg}
         active={phase === 'downloading_nllb'}
+      />
+
+      <AssetRow
+        label="Hebrew Font"
+        description="Rubik-Regular.ttf for subtitle export  •  ~140 KB"
+        progress={fontProg}
+        active={phase === 'downloading_font'}
       />
 
       {phase === 'error' && (
@@ -118,41 +191,14 @@ export function ModelSetupScreen({onComplete}: ModelSetupScreenProps): React.JSX
         onPress={downloadAll}
         disabled={isActive}
         activeOpacity={0.85}>
-        <Text style={styles.btnText}>
-          {phase === 'idle' ? 'Download Models'
-            : phase === 'error' ? 'Retry'
-            : 'Downloading…'}
-        </Text>
+        <Text style={styles.btnText}>{btnLabel}</Text>
       </TouchableOpacity>
 
       <Text style={styles.hint}>
-        Requires a Wi-Fi connection. Models are stored locally and never uploaded.
+        Requires a network connection. All files are saved locally and never
+        uploaded. Total download: ~458 MB.
       </Text>
     </ScrollView>
-  );
-}
-
-function ModelRow({
-  label,
-  description,
-  progress,
-  active,
-}: {
-  label: string;
-  description: string;
-  progress: number;
-  active: boolean;
-}): React.JSX.Element {
-  return (
-    <View style={styles.modelRow}>
-      <View style={styles.modelHeader}>
-        <Text style={styles.modelLabel}>{label}</Text>
-        {progress >= 1 && <Text style={styles.checkmark}>✓</Text>}
-        {active && <Text style={styles.activeLabel}>Downloading…</Text>}
-      </View>
-      <Text style={styles.modelDesc}>{description}</Text>
-      <ProgressBar progress={progress} />
-    </View>
   );
 }
 
@@ -174,18 +220,18 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginBottom: 8,
   },
-  modelRow: {
+  assetRow: {
     width: '100%',
     backgroundColor: '#1A1A1A',
     borderRadius: 12,
     padding: 16,
     gap: 8,
   },
-  modelHeader: {flexDirection: 'row', alignItems: 'center', gap: 8},
-  modelLabel: {color: '#FFF', fontWeight: '600', fontSize: 15, flex: 1},
+  assetHeader: {flexDirection: 'row', alignItems: 'center', gap: 8},
+  assetLabel: {color: '#FFF', fontWeight: '600', fontSize: 15, flex: 1},
   checkmark: {color: '#4CAF50', fontSize: 16, fontWeight: '700'},
   activeLabel: {color: '#FFD700', fontSize: 12},
-  modelDesc: {color: '#888', fontSize: 12},
+  assetDesc: {color: '#888', fontSize: 12},
   progressTrack: {
     height: 4,
     backgroundColor: '#333',

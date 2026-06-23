@@ -13,6 +13,7 @@ import {
   isModelPresent,
   WHISPER_MODEL,
   NLLB_MODEL,
+  RUBIK_FONT,
   modelPath,
 } from './services/ModelSetupService';
 
@@ -30,10 +31,13 @@ export default function App(): React.JSX.Element {
   }, []);
 
   async function checkModelsAndInit() {
-    const whisperOk = await isModelPresent(WHISPER_MODEL);
-    const nllbOk = await isModelPresent(NLLB_MODEL);
+    const [whisperOk, nllbOk, fontOk] = await Promise.all([
+      isModelPresent(WHISPER_MODEL),
+      isModelPresent(NLLB_MODEL),
+      isModelPresent(RUBIK_FONT),
+    ]);
 
-    if (!whisperOk || !nllbOk) {
+    if (!whisperOk || !nllbOk || !fontOk) {
       setAppPhase('setup');
       return;
     }

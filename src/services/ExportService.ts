@@ -4,57 +4,31 @@ import {CameraRoll} from '@react-native-camera-roll/camera-roll';
 import type {SubtitleCue} from '../types';
 import {writeSRTFile} from '../utils/srtUtils';
 import {useSubtitleStore} from '../store/subtitleStore';
+import {RUBIK_FONT, modelPath} from './ModelSetupService';
 
 const EXPORT_DIR = `${RNFS.CachesDirectoryPath}/coresubs_export`;
-const FONTS_CACHE_DIR = `${RNFS.CachesDirectoryPath}/coresubs_fonts`;
-
-/**
- * Copies the Hebrew font from Android assets into the app's cache directory
- * so that ffmpeg's subtitles filter can locate it via `fontsdir`.
- *
- * Font setup (one-time, done manually before building):
- *   1. Download Rubik-Regular.ttf from Google Fonts (supports full Hebrew Unicode block)
- *      Alternative: AssistantHebrew-Regular.ttf or NotoSansHebrew-Regular.ttf
- *   2. Place the file at:
- *        android/app/src/main/assets/fonts/Rubik-Regular.ttf
- *   The Metro bundler does NOT need to know about this file — it is referenced
- *   only by the native Android asset system and accessed here via RNFS.copyFileAssets().
- *
- * Returns the directory path passed to ffmpeg's `fontsdir` option.
- */
-async function prepareFontDirectory(): Promise<string> {
-  if (!(await RNFS.exists(FONTS_CACHE_DIR))) {
-    await RNFS.mkdir(FONTS_CACHE_DIR);
-  }
-
-  const destPath = `${FONTS_CACHE_DIR}/Rubik-Regular.ttf`;
-
-  // Only copy if the cached copy is absent (avoids redundant I/O on repeat exports)
-  if (!(await RNFS.exists(destPath))) {
-    // Copies from android/app/src/main/assets/fonts/Rubik-Regular.ttf
-    // The assets path is relative to the assets root.
-    await RNFS.copyFileAssets('fonts/Rubik-Regular.ttf', destPath);
-  }
-
-  return FONTS_CACHE_DIR;
-}
 
 /**
  * Burns Hebrew subtitles into the video using ffmpeg's subtitles filter
  * backed by libass + libfribidi (included in the `video` ffmpeg-kit package).
  *
  * RTL rendering chain:
- *   SRT file (U+200F RTL mark on each line)
+ *   SRT file (each line prefixed with U+200F RTL mark)
  *     → libass parses cues
  *     → libfribidi runs the Unicode BiDi algorithm
- *     → Hebrew glyphs are ordered and shaped right-to-left
- *     → Rubik font renders the shaped glyphs
- *     → libass composites the subtitle onto the video frame
+ *     → Hebrew glyphs are shaped and ordered right-to-left
+ *     → Rubik font (downloaded at first launch to DocumentDirectory/fonts/)
+ *        renders the glyphs
+ *     → libass composites the subtitle onto the decoded video frame
  *
- * Why `executeWithArguments` instead of `execute`:
- *   `FFmpegKit.execute(string)` splits on whitespace, which breaks the
- *   subtitles filter value (it contains spaces in force_style). Passing
- *   arguments as a pre-split array bypasses all shell-level parsing.
+ * Font path: RUBIK_FONT is downloaded by ModelSetupScreen at first launch.
+ *   fontsdir points to DocumentDirectory/fonts/ — the same directory where
+ *   the font was saved. No APK-bundled assets are needed.
+ *
+ * Why executeWithArguments:
+ *   FFmpegKit.execute(string) splits on whitespace; the subtitles filter
+ *   value contains spaces inside force_style which would cause a parse error.
+ *   Passing a pre-split string[] bypasses all shell-level tokenisation.
  */
 export async function exportWithSubtitles(
   videoUri: string,
@@ -72,55 +46,51 @@ export async function exportWithSubtitles(
   const outputPath = `${EXPORT_DIR}/exported_${Date.now()}.mp4`;
 
   try {
-    // ── Step 1: Generate SRT ──────────────────────────────────────────────────
+    // ── Step 1: Generate the SRT file ────────────────────────────────────────
     await writeSRTFile(cues, srtPath);
     setExportState({status: 'encoding', progress: 5});
 
-    // ── Step 2: Copy Hebrew font from Android assets → cache ─────────────────
-    const fontsDirPath = await prepareFontDirectory();
+    // ── Step 2: Verify the font was downloaded ───────────────────────────────
+    // The font lives at DocumentDirectory/fonts/Rubik-Regular.ttf, written
+    // by ModelSetupScreen on first launch. No copy from assets is needed.
+    const fontFilePath = modelPath(RUBIK_FONT);
+    if (!(await RNFS.exists(fontFilePath))) {
+      throw new Error(
+        'Hebrew font not found. Please complete the first-time setup before exporting.',
+      );
+    }
+    // fontsdir is the directory containing the TTF; libass resolves fonts by
+    // family name within that directory.
+    const fontsDirPath = RUBIK_FONT.dir;
 
-    // ── Step 3: Build the subtitles filter string ─────────────────────────────
+    // ── Step 3: Build the subtitles filter ───────────────────────────────────
     //
-    // Filter option reference:
-    //   filename     — absolute path to the SRT file
-    //   fontsdir     — directory where libass searches for fonts by family name.
-    //                  Must be set explicitly; Android has no Hebrew system fonts.
-    //   force_style  — ASS-style overrides applied to all SRT cues:
-    //     FontName       : must match the font family name inside the TTF exactly
-    //                      ("Rubik" for Rubik-Regular.ttf).
-    //     FontSize       : 22pt balances legibility and screen coverage
-    //     PrimaryColour  : &HAABBGGRR — &H00FFFFFF = fully opaque white
-    //     OutlineColour  : &H00000000 = fully opaque black outline
-    //     BackColour     : &H80000000 = 50% transparent black box shadow
-    //     Outline        : 2 = outline thickness in pixels
-    //     Shadow         : 0 = no drop shadow (outline already provides contrast)
-    //     MarginV        : 40 = pixels from the bottom edge
-    //     Alignment      : 2 = ASS numpad bottom-centre
-    //                      libfribidi flips glyph order to RTL automatically;
-    //                      the paragraph anchor stays centred.
-    //
-    // Paths on Android never contain colons, so no ':' escaping is needed.
-    // Single-quoting each value protects against commas or spaces inside
-    // the force_style list being misread as filter-graph separators.
+    // force_style ASS options:
+    //   FontName     — must match the font's internal family name ("Rubik")
+    //   FontSize     — 22pt: legible on 1080p without covering too much frame
+    //   PrimaryColour  &HAABBGGRR → &H00FFFFFF = fully opaque white
+    //   OutlineColour  &H00000000 = fully opaque black
+    //   BackColour     &H80000000 = 50% transparent black (box behind text)
+    //   Outline      2 = border thickness in pixels
+    //   Shadow       0 = no drop shadow (outline is sufficient)
+    //   MarginV      40 = px from bottom edge
+    //   Alignment    2 = ASS numpad bottom-centre; libfribidi reorders
+    //                    glyphs within the line to RTL automatically
     const subsFilter = [
       `subtitles=filename='${srtPath}'`,
       `fontsdir='${fontsDirPath}'`,
       "force_style='FontName=Rubik,FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,Outline=2,Shadow=0,MarginV=40,Alignment=2'",
     ].join(':');
 
-    // Prepend a scale pass that rounds dimensions to even numbers.
-    // h264_mediacodec (and most H.264 encoders) require width and height to
-    // be multiples of 2; trunc(iw/2)*2 is a no-op for compliant source.
+    // Scale ensures even dimensions required by h264_mediacodec;
+    // trunc(iw/2)*2 is a no-op when the source is already compliant.
     const vfFilter = `scale=trunc(iw/2)*2:trunc(ih/2)*2,${subsFilter}`;
 
-    // ── Step 4: Build the argument array ─────────────────────────────────────
+    // ── Step 4: Build argument array ─────────────────────────────────────────
     //
-    // Encoder: h264_mediacodec — Android's hardware H.264 encoder via MediaCodec.
-    // Benefits over libx264 (software):
-    //   - 5-10x faster on Pixel 10 Pro XL (Tensor G4 dedicated video block)
-    //   - Lower battery consumption during export
-    //   - Does not require GPL licensing (unlike libx264)
-    // -b:v 4M: 4 Mbit/s is adequate for 1080p; adjust if source is 4K.
+    // h264_mediacodec: Android hardware H.264 encoder (MediaCodec API).
+    //   Faster than libx264 software encode on Tensor G4; LGPL-compatible
+    //   so it works with the "video" ffmpeg-kit package (no GPL needed).
     const args = [
       '-i',        videoUri,
       '-vf',       vfFilter,
@@ -131,17 +101,15 @@ export async function exportWithSubtitles(
                    outputPath,
     ];
 
-    // ── Step 5: Register progress callback ───────────────────────────────────
+    // ── Step 5: Progress callback ─────────────────────────────────────────────
     FFmpegKitConfig.enableStatisticsCallback(stats => {
-      // stats.getTime() is encoding position in milliseconds.
-      // We don't know the total duration here, so we map elapsed time
-      // to a logarithmic curve that reaches ~90% around the 2-minute mark.
       const elapsedSec = stats.getTime() / 1000;
+      // Log curve: reaches ~90% after ~2 minutes of encoding time
       const approxProgress = Math.min(93, 5 + Math.log1p(elapsedSec) * 20);
       setExportState({status: 'encoding', progress: approxProgress});
     });
 
-    // ── Step 6: Run ffmpeg ────────────────────────────────────────────────────
+    // ── Step 6: Execute ───────────────────────────────────────────────────────
     const session = await FFmpegKit.executeWithArguments(args);
     FFmpegKitConfig.enableStatisticsCallback(null);
 
