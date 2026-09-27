@@ -39,9 +39,7 @@ export function ExportModal({
   const {exportState, getAllCues, setExportState} = useSubtitleStore();
   const {meta} = useVideoStore();
 
-  const isProcessing = ['generating_srt', 'encoding', 'saving'].includes(
-    exportState.status,
-  );
+  const isProcessing = ['encoding', 'saving'].includes(exportState.status);
 
   const handleExport = useCallback(async () => {
     if (!meta?.uri) {
@@ -98,7 +96,6 @@ export function ExportModal({
 
   const statusLabel: Record<string, string> = {
     idle: 'Ready to export',
-    generating_srt: 'Generating subtitle file…',
     encoding: `Encoding video… ${Math.round(exportState.progress)}%`,
     saving: 'Saving to gallery…',
     done: '✓ Saved to gallery',

@@ -63,13 +63,11 @@ const styles = StyleSheet.create({
   },
   text: {
     color: '#FFFFFF',
-    // No fontFamily override: a custom font can't be wired into RN's Text
-    // component on Android just by sitting in DocumentDirectory (it would
-    // need to be bundled under android/assets/fonts/ at build time, which
-    // the project intentionally avoids — see ModelSetupService.ts). Leaving
-    // this unset falls back to the system font, which resolves Hebrew
-    // glyphs via Android's built-in Noto Sans Hebrew fallback. Rubik is
-    // used only for the burned-in export video, via ffmpeg's fontsdir.
+    // No fontFamily override: leaving this unset falls back to the system
+    // font, which resolves Hebrew glyphs via Android's built-in Noto Sans
+    // Hebrew fallback. The exported video's burned-in subtitles are
+    // rendered the same way, via Android's own Canvas/StaticLayout (see
+    // SubtitleExportModule.kt) — no custom font file needed for either.
     lineHeight: 28,
     letterSpacing: 0.2,
   },

@@ -12,6 +12,7 @@ import com.facebook.react.defaults.DefaultReactNativeHost
 import com.facebook.soloader.SoLoader
 import com.coresubsapp.whisper.WhisperPackage
 import com.coresubsapp.translation.TranslatorPackage
+import com.coresubsapp.media.MediaPackage
 
 class MainApplication : Application(), ReactApplication {
 
@@ -21,6 +22,7 @@ class MainApplication : Application(), ReactApplication {
                 PackageList(this).packages.apply {
                     add(WhisperPackage())
                     add(TranslatorPackage())
+                    add(MediaPackage())
                 }
 
             override fun getJSMainModuleName(): String = "index"

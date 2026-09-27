@@ -7,9 +7,11 @@
  * ModelManifest.ts) to DocumentDirectory:
  *   1. Whisper STT model                (~148 MB)
  *   2. TranslateGemma-4B translation model (size TBD — see ModelManifest.ts)
- *   3. Rubik-Regular.ttf Hebrew font for export (~140 KB)
  *
- * None of these are bundled in the APK. Downloading at runtime keeps the
+ * (No font download: subtitle export renders text via Android's own
+ * Canvas/StaticLayout, not a custom font file — see SubtitleExportModule.kt.)
+ *
+ * Neither model is bundled in the APK. Downloading at runtime keeps the
  * repository and CI artefacts lightweight, and lets a newer checkpoint be
  * rolled out by editing models-manifest.json — no app update needed.
  */
@@ -30,7 +32,7 @@ import {downloadModel, isModelPresent} from '../../services/ModelSetupService';
 
 type DownloadPhase = 'idle' | ManifestKey | 'done' | 'error';
 
-const ALL_KEYS: ManifestKey[] = ['whisper', 'translator', 'font'];
+const ALL_KEYS: ManifestKey[] = ['whisper', 'translator'];
 
 interface AssetProgress {
   bytes: number;
@@ -41,7 +43,7 @@ interface ModelSetupScreenProps {
   manifest: ModelManifest;
   onComplete: () => void;
   /** Restrict to a subset of assets — used by the "update available" flow
-   *  to re-download only the outdated ones. Defaults to all three. */
+   *  to re-download only the outdated ones. Defaults to both. */
   onlyKeys?: ManifestKey[];
 }
 
@@ -62,13 +64,6 @@ const ASSET_LABELS: Record<
       `English → Hebrew  •  ${a.family}  •  ~${Math.round(
         a.sizeBytes / 1_000_000,
       )} MB`,
-  },
-  font: {
-    label: 'Hebrew Font',
-    describe: a =>
-      `${a.filename} for subtitle export  •  ~${Math.round(
-        a.sizeBytes / 1_000,
-      )} KB`,
   },
 };
 

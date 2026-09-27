@@ -22,7 +22,6 @@ allprojects {
     repositories {
         google()
         mavenCentral()
-        // ffmpeg-kit-react-native publishes to Maven Central
     }
 }
 

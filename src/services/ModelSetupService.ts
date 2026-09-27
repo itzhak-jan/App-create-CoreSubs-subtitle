@@ -2,16 +2,11 @@ import RNFS from 'react-native-fs';
 import type {ManifestAsset, ManifestKey, ModelManifest} from './ModelManifest';
 
 export const MODELS_DIR = `${RNFS.DocumentDirectoryPath}/models`;
-export const FONTS_DIR = `${RNFS.DocumentDirectoryPath}/fonts`;
 const INSTALLED_VERSIONS_PATH = `${RNFS.DocumentDirectoryPath}/.installed_versions.json`;
-
-function dirFor(asset: ManifestAsset): string {
-  return asset.dir === 'fonts' ? FONTS_DIR : MODELS_DIR;
-}
 
 /** Returns the absolute path to a manifest asset's file on device. */
 export function modelPath(asset: ManifestAsset): string {
-  return `${dirFor(asset)}/${asset.filename}`;
+  return `${MODELS_DIR}/${asset.filename}`;
 }
 
 async function ensureDir(dir: string): Promise<void> {
@@ -77,7 +72,7 @@ async function writeInstalledVersion(
 export async function checkForUpdates(
   manifest: ModelManifest,
 ): Promise<ManifestKey[]> {
-  const keys: ManifestKey[] = ['whisper', 'translator', 'font'];
+  const keys: ManifestKey[] = ['whisper', 'translator'];
   const installed = await readInstalledVersions();
   const outdated: ManifestKey[] = [];
 
@@ -103,7 +98,7 @@ export async function downloadModel(
   asset: ManifestAsset,
   onProgress: (bytesWritten: number, contentLength: number) => void,
 ): Promise<string> {
-  await ensureDir(dirFor(asset));
+  await ensureDir(MODELS_DIR);
   const destPath = modelPath(asset);
 
   const {promise} = RNFS.downloadFile({

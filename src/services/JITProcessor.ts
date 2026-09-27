@@ -8,10 +8,13 @@
  *  - Throttles concurrent work to avoid thermal pressure
  */
 
-import {FFmpegKit} from 'ffmpeg-kit-react-native';
 import type {AudioChunk, PipelineConfig} from '../types';
 import {DEFAULT_PIPELINE_CONFIG} from '../types';
-import {extractChunk, deleteChunk} from './ChunkExtractor';
+import {
+  extractChunk,
+  deleteChunk,
+  abortChunkExtraction,
+} from './ChunkExtractor';
 import {transcribeAudio, abortTranscription} from './STTService';
 import {translateSegments, abortTranslation} from './TranslationService';
 import {extractGlossaryEntries} from './GlossaryExtractor';
@@ -93,10 +96,10 @@ class JITProcessor {
   async seek(newTimeSec: number): Promise<void> {
     const myGen = ++this.generation; // invalidates any in-flight processChunk call
 
-    // Cancel any in-flight FFmpeg session and AI calls. These are best-effort:
-    // a stale call may still resume after this, but the generation bump above
+    // Cancel any in-flight extraction/AI calls. These are best-effort: a
+    // stale call may still resume after this, but the generation bump above
     // means it can no longer touch the store or `this.state` once it does.
-    await FFmpegKit.cancel();
+    abortChunkExtraction();
     abortTranscription();
     abortTranslation();
 
@@ -122,7 +125,7 @@ class JITProcessor {
 
   reset(): void {
     this.generation++;
-    FFmpegKit.cancel();
+    abortChunkExtraction();
     abortTranscription();
     abortTranslation();
     this.state = 'idle';

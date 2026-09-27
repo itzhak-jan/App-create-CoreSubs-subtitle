@@ -53,13 +53,12 @@ export default function App(): React.JSX.Element {
     const m = await fetchManifest();
     setManifest(m);
 
-    const [whisperOk, translatorOk, fontOk] = await Promise.all([
+    const [whisperOk, translatorOk] = await Promise.all([
       isModelPresent(m.whisper),
       isModelPresent(m.translator),
-      isModelPresent(m.font),
     ]);
 
-    if (!whisperOk || !translatorOk || !fontOk) {
+    if (!whisperOk || !translatorOk) {
       setAppPhase('setup');
       return;
     }

@@ -12,7 +12,6 @@
     "react": "18.2.0",
     "react-native": "0.74.5",
     "react-native-video": "6.4.5",
-    "ffmpeg-kit-react-native": "6.0.2",
     "react-native-fs": "2.20.0",
     "react-native-document-picker": "9.3.0",
     "react-native-permissions": "4.1.5",

@@ -81,8 +81,19 @@ dependencies {
     // (see TranslatorModule.kt for why this replaced a raw TFLite approach).
     implementation 'com.google.mediapipe:tasks-genai:0.10.27'
 
+    // AndroidX Media3 — replaces ffmpeg-kit-react-native for both audio chunk
+    // extraction and subtitle burn-in on export. ffmpeg-kit's native binaries
+    // (com.arthenica:ffmpeg-kit-*) were pulled from every Maven repository
+    // when that project retired (2026-04-01) — this app can no longer depend
+    // on it at all. Media3 wraps Android's own MediaCodec/MediaMuxer, is
+    // Google-maintained, and gets patched via normal Android/Play updates
+    // rather than depending on a now-abandoned third-party C demuxer parsing
+    // untrusted video files. See AudioChunkExtractorModule.kt and
+    // SubtitleExportModule.kt for what each piece is used for.
+    implementation 'androidx.media3:media3-transformer:1.10.1'
+    implementation 'androidx.media3:media3-effect:1.10.1'
+    implementation 'androidx.media3:media3-common:1.10.1'
+
     // Kotlin coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 }
-
-// Ensure ffmpeg-kit is included via autolinking (configured in package.json)

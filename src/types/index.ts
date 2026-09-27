@@ -87,13 +87,7 @@ export interface VideoMeta {
 
 // ─── Export ──────────────────────────────────────────────────────────────────
 
-export type ExportStatus =
-  | 'idle'
-  | 'generating_srt'
-  | 'encoding'
-  | 'saving'
-  | 'done'
-  | 'error';
+export type ExportStatus = 'idle' | 'encoding' | 'saving' | 'done' | 'error';
 
 export interface ExportState {
   status: ExportStatus;

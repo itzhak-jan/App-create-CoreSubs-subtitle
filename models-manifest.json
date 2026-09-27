@@ -15,13 +15,5 @@
     "url": "https://huggingface.co/litert-community/TranslateGemma-4B-IT/resolve/main/translategemma-4b-it.task",
     "sizeBytes": 2800000000,
     "dir": "models"
-  },
-  "font": {
-    "family": "rubik-font",
-    "version": "1.0.0",
-    "filename": "Rubik-Regular.ttf",
-    "url": "https://github.com/google/fonts/raw/main/ofl/rubik/Rubik-Regular.ttf",
-    "sizeBytes": 138000,
-    "dir": "fonts"
   }
 }

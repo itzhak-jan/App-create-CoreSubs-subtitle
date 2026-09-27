@@ -30,7 +30,7 @@
  *   TranslatorModule.kt's header comment for the full detail.
  */
 export interface ManifestAsset {
-  /** Model family, e.g. "whisper-ggml", "translategemma-4b", "rubik-font". Purely
+  /** Model family, e.g. "whisper-ggml", "translategemma-4b". Purely
    *  informational — lets a future manifest swap in a sibling checkpoint
    *  from the same family without the app needing to know the difference. */
   family: string;
@@ -41,13 +41,12 @@ export interface ManifestAsset {
   url: string;
   /** Minimum expected file size in bytes — used to detect corrupt/partial downloads. */
   sizeBytes: number;
-  dir: 'models' | 'fonts';
+  dir: 'models';
 }
 
 export interface ModelManifest {
   whisper: ManifestAsset;
   translator: ManifestAsset;
-  font: ManifestAsset;
 }
 
 export type ManifestKey = keyof ModelManifest;
@@ -87,14 +86,6 @@ export const DEFAULT_MANIFEST: ModelManifest = {
     sizeBytes: 2_800_000_000,
     dir: 'models',
   },
-  font: {
-    family: 'rubik-font',
-    version: '1.0.0',
-    filename: 'Rubik-Regular.ttf',
-    url: 'https://github.com/google/fonts/raw/main/ofl/rubik/Rubik-Regular.ttf',
-    sizeBytes: 138_000,
-    dir: 'fonts',
-  },
 };
 
 let cachedManifest: ModelManifest = DEFAULT_MANIFEST;
@@ -109,7 +100,7 @@ function isValidManifest(json: unknown): json is ModelManifest {
     return false;
   }
   const m = json as Partial<ModelManifest>;
-  return ['whisper', 'translator', 'font'].every(key => {
+  return ['whisper', 'translator'].every(key => {
     const asset = (m as Record<string, unknown>)[key] as
       | Partial<ManifestAsset>
       | undefined;
