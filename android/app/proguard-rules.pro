@@ -16,14 +16,18 @@
 # AndroidX Media3 (AudioChunkExtractorModule.kt, SubtitleExportModule.kt)
 -keep class androidx.media3.** { *; }
 
-# R8 (full mode) traces referenced classes even when they're annotation-only
-# and never needed at runtime. AutoValue and protobuf's nullability/proto
-# annotation classes fall in that category — compile-time-only dependencies
-# of com.google.mediapipe.tasks.genai's generated code that aren't actually
-# on the runtime classpath. This is the standard, documented fix for this
-# exact "Missing class com.google.auto.value.AutoValue$Builder" /
-# "Missing class com.google.protobuf.Internal$ProtoNonnullApi" class of R8
-# error, not specific to this project.
+# R8 (full mode) traces every class referenced anywhere in mediapipe's own
+# code, including optional feature paths this app never uses (multi-modal
+# image input's com.google.mediapipe.framework.image.*, AutoValue/protobuf
+# codegen's annotation-only classes) and compile-time-only annotation
+# classes that were never meant to be on the runtime classpath. Both showed
+# up as separate "Missing class" build failures in back-to-back CI runs —
+# this is a known, ongoing issue with this exact library (see
+# google-ai-edge/mediapipe#6110, #6138), not specific to this project;
+# -dontwarn com.google.mediapipe.** is the community-standard workaround,
+# broad enough to not need another CI round-trip for the next optional
+# feature path R8 happens to trace into.
+-dontwarn com.google.mediapipe.**
 -dontwarn com.google.auto.value.**
 -dontwarn com.google.protobuf.**
 
