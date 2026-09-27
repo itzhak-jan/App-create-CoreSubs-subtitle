@@ -3,6 +3,7 @@ package com.coresubsapp.translation
 import com.facebook.react.bridge.*
 import com.facebook.react.module.annotations.ReactModule
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
+import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -51,6 +52,19 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Hardware notes for Pixel 10 Pro XL: the LLM Inference API dispatches to
  * GPU/NPU automatically where supported by the backend build; no manual
  * delegate wiring is needed here (unlike the old raw-TFLite module).
+ *
+ * Note: com.google.mediapipe.tasks.genai.llminference.LlmInference and
+ * LlmInferenceSession are both marked @Deprecated upstream in favour of
+ * LiteRT-LM as of this writing. Used anyway because it's still shipping and
+ * functional, and migrating to LiteRT-LM's separate API surface is a bigger
+ * change than this session verified time for — worth revisiting later.
+ * topK/temperature live on LlmInferenceSession, not LlmInference itself: the
+ * engine (LlmInference) only takes maxTopK as a ceiling that sessions can't
+ * exceed, so every generation call opens a short-lived session with the
+ * actual sampling params, generates once, and closes it — confirmed against
+ * the real source on GitHub (google-ai-edge/mediapipe) after an earlier
+ * version of this file (using setTopK/setTemperature directly on
+ * LlmInferenceOptions.Builder, which don't exist there) failed to compile.
  */
 @ReactModule(name = TranslatorModule.NAME)
 class TranslatorModule(reactContext: ReactApplicationContext) :
@@ -92,8 +106,7 @@ class TranslatorModule(reactContext: ReactApplicationContext) :
                 val options = LlmInference.LlmInferenceOptions.builder()
                     .setModelPath(modelPath)
                     .setMaxTokens(MAX_TOKENS)
-                    .setTopK(TOP_K)
-                    .setTemperature(TEMPERATURE)
+                    .setMaxTopK(TOP_K) // ceiling; the actual per-call topK is set on the session below
                     .build()
 
                 llmInference = LlmInference.createFromOptions(reactApplicationContext, options)
@@ -135,9 +148,7 @@ class TranslatorModule(reactContext: ReactApplicationContext) :
                     for (i in 0 until prompts.size()) {
                         if (abortFlag.get()) break
                         val prompt = prompts.getString(i) ?: ""
-                        batch.pushString(
-                            if (prompt.isBlank()) "" else engine.generateResponse(prompt).trim(),
-                        )
+                        batch.pushString(if (prompt.isBlank()) "" else generateOne(engine, prompt))
                     }
                     batch
                 }
@@ -161,5 +172,26 @@ class TranslatorModule(reactContext: ReactApplicationContext) :
         scope.cancel()
         llmInference?.close()
         llmInference = null
+    }
+
+    /**
+     * A short-lived LlmInferenceSession per prompt: session-level options
+     * are where topK/temperature actually live, and a fresh session avoids
+     * any risk of one prompt's conversational context (addQueryChunk)
+     * leaking into the next — each translation/extraction call here is
+     * independent, not a multi-turn conversation.
+     */
+    private fun generateOne(engine: LlmInference, prompt: String): String {
+        val sessionOptions = LlmInferenceSession.LlmInferenceSessionOptions.builder()
+            .setTopK(TOP_K)
+            .setTemperature(TEMPERATURE)
+            .build()
+        val session = LlmInferenceSession.createFromOptions(engine, sessionOptions)
+        try {
+            session.addQueryChunk(prompt)
+            return session.generateResponse().trim()
+        } finally {
+            session.close()
+        }
     }
 }

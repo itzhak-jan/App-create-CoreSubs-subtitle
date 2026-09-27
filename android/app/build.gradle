@@ -104,3 +104,13 @@ dependencies {
     // Kotlin coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 }
+
+// settings.gradle's applyNativeModulesSettingsGradle(settings) only wires up
+// native library subprojects to `include()`. The counterpart call below is
+// what actually generates PackageList.java (referenced from
+// MainApplication.kt) into build/generated/rncli/ and adds that directory
+// to the app module's Java source set — without it, PackageList is simply
+// never generated and every reference to it fails to resolve. Both calls
+// come from the same native_modules.gradle; the real react-native@0.74.5
+// template applies both, one from settings.gradle and one from here.
+apply from: file("../../node_modules/@react-native-community/cli-platform-android/native_modules.gradle"); applyNativeModulesAppBuildGradle(project)
