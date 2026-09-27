@@ -90,9 +90,16 @@ dependencies {
     // rather than depending on a now-abandoned third-party C demuxer parsing
     // untrusted video files. See AudioChunkExtractorModule.kt and
     // SubtitleExportModule.kt for what each piece is used for.
-    implementation 'androidx.media3:media3-transformer:1.10.1'
-    implementation 'androidx.media3:media3-effect:1.10.1'
-    implementation 'androidx.media3:media3-common:1.10.1'
+    //
+    // Pinned to 1.9.1, not the latest (1.10.1+): every Media3 version with
+    // CanvasOverlay (added in 1.6.0, used by SubtitleExportModule.kt) needs
+    // compileSdk >= 35 — already bumped above — but 1.10.1 specifically
+    // needs compileSdk 36, which pulls in AGP 9.x/Gradle 9.x too. 1.9.1 is
+    // the newest release confirmed (checked its constants.gradle on GitHub)
+    // to still only need compileSdk 35, avoiding that much bigger jump.
+    implementation 'androidx.media3:media3-transformer:1.9.1'
+    implementation 'androidx.media3:media3-effect:1.9.1'
+    implementation 'androidx.media3:media3-common:1.9.1'
 
     // Kotlin coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'

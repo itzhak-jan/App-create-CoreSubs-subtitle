@@ -1,8 +1,14 @@
 buildscript {
     ext {
-        buildToolsVersion = "34.0.0"
+        // compileSdk/buildTools 35 and AGP 8.6.0 (minimum Gradle 8.7, see the
+        // wrapper) are required by androidx.media3 1.6.0+ (CanvasOverlay,
+        // used by SubtitleExportModule.kt, was added in 1.6.0 — every version
+        // with it needs compileSdk >= 35, and 1.10.1 needs 36, which would
+        // additionally require AGP 9.x/Gradle 9.x; pinning Media3 to 1.9.1 in
+        // app/build.gradle avoids that much bigger, riskier jump).
+        buildToolsVersion = "35.0.0"
         minSdkVersion    = 26        // Android 8 minimum (Pixel 10 runs 15)
-        compileSdkVersion = 34
+        compileSdkVersion = 35
         targetSdkVersion = 34
         ndkVersion = "26.1.10909125"
         kotlinVersion = "1.9.22"
@@ -12,7 +18,7 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath("com.android.tools.build:gradle:8.3.2")
+        classpath("com.android.tools.build:gradle:8.6.0")
         classpath("com.facebook.react:react-native-gradle-plugin")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:${kotlinVersion}")
     }
