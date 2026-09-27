@@ -1,5 +1,6 @@
 import {NativeModules} from 'react-native';
-import type {WhisperSegment} from '../types';
+import type {WhisperSegment, GlossaryEntry} from '../types';
+import {useGlossaryStore} from '../store/glossaryStore';
 
 const {TranslatorModule} = NativeModules;
 
@@ -20,9 +21,41 @@ export async function initTranslation(modelPath: string): Promise<void> {
   await TranslatorModule.init(modelPath);
 }
 
+function buildTranslationPrompt(
+  text: string,
+  glossary: GlossaryEntry[],
+): string {
+  let reference = '';
+  if (glossary.length > 0) {
+    const lines = glossary.map(e => {
+      const gender =
+        e.gender === 'm' ? ' (male)' : e.gender === 'f' ? ' (female)' : '';
+      const note = e.category === 'phrase' ? ' — fixed phrase, keep as-is' : '';
+      return `- "${e.term}" -> "${e.hebrew}"${gender}${note}`;
+    });
+    reference =
+      '\n\nReference — use these exact renderings, and keep Hebrew grammatical ' +
+      `gender consistent with the notes below:\n${lines.join('\n')}`;
+  }
+  return (
+    'Translate the following English text to Hebrew. ' +
+    'Respond with only the Hebrew translation, no explanation.' +
+    reference +
+    `\n\nText: ${text}\nTranslation:`
+  );
+}
+
 /**
  * Translate an array of source segments into Hebrew.
  * Returns Hebrew strings in the same order as the input segments.
+ *
+ * For each segment, looks up glossary entries (names/places/fixed phrases
+ * learned from earlier in this video — see glossaryStore.ts) whose term
+ * appears in the segment, and includes them as in-prompt reference so the
+ * model reuses the same Hebrew rendering and gender consistently. A
+ * segment that is *exactly* a known fixed phrase (category 'phrase')
+ * skips the model entirely and reuses the stored translation verbatim —
+ * more reliable than hoping the model repeats its own earlier wording.
  */
 export async function translateSegments(
   segments: WhisperSegment[],
@@ -31,11 +64,38 @@ export async function translateSegments(
     return segments.map(s => s.text);
   }
 
-  const texts = segments.map(s => s.text.trim()).filter(Boolean);
+  const {findRelevant} = useGlossaryStore.getState();
+  const results: string[] = new Array(segments.length).fill('');
+  const pending: Array<{index: number; prompt: string}> = [];
 
-  // The LLM Inference API generates one response per prompt (no native
-  // tensor-batching), so the native side loops sequentially over `texts`.
-  const results: string[] = await TranslatorModule.translateBatch(texts);
+  segments.forEach((seg, i) => {
+    const text = seg.text.trim();
+    if (!text) {
+      return;
+    }
+
+    const relevant = findRelevant(text);
+    const exactPhrase = relevant.find(
+      e =>
+        e.category === 'phrase' && e.term.toLowerCase() === text.toLowerCase(),
+    );
+    if (exactPhrase) {
+      results[i] = exactPhrase.hebrew;
+      return;
+    }
+
+    pending.push({index: i, prompt: buildTranslationPrompt(text, relevant)});
+  });
+
+  if (pending.length > 0) {
+    const responses: string[] = await TranslatorModule.generateBatch(
+      pending.map(p => p.prompt),
+    );
+    pending.forEach((p, j) => {
+      results[p.index] = (responses[j] ?? '').trim();
+    });
+  }
+
   return results;
 }
 

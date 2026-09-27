@@ -14,6 +14,8 @@ import {DEFAULT_PIPELINE_CONFIG} from '../types';
 import {extractChunk, deleteChunk} from './ChunkExtractor';
 import {transcribeAudio, abortTranscription} from './STTService';
 import {translateSegments, abortTranslation} from './TranslationService';
+import {extractGlossaryEntries} from './GlossaryExtractor';
+import {useGlossaryStore} from '../store/glossaryStore';
 import {
   mapSegmentsToCues,
   chunkIndexForTime,
@@ -127,6 +129,9 @@ class JITProcessor {
     this.videoUri = '';
     this.videoDuration = 0;
     useSubtitleStore.getState().reset();
+    // Glossary entries are facts about THIS video's content — clear on a
+    // genuinely new video, but not on seek() (a jump within the same video).
+    useGlossaryStore.getState().reset();
   }
 
   private getBufferEndTime(): number {
@@ -206,6 +211,26 @@ class JITProcessor {
         return;
       }
       const hebrewTexts = await translateSegments(whisperResult.segments);
+
+      // Fire-and-forget: learn names/places/fixed phrases from this chunk
+      // for future consistency. Never awaited — must not add latency to the
+      // real-time pipeline — and deliberately not gated by `gen`: glossary
+      // entries are facts about the video's content, not the playhead
+      // position, so even a chunk superseded by a seek is still worth
+      // learning from.
+      extractGlossaryEntries(
+        whisperResult.segments.map((seg, i) => ({
+          original: seg.text.trim(),
+          hebrew: hebrewTexts[i] ?? '',
+        })),
+      )
+        .then(entries => {
+          if (entries.length > 0) {
+            useGlossaryStore.getState().upsertEntries(entries);
+          }
+        })
+        .catch(() => {}); // extractGlossaryEntries already catches internally; belt & suspenders
+
       if (gen !== this.generation) {
         return;
       }
