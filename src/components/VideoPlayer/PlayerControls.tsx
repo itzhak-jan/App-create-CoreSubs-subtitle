@@ -111,7 +111,11 @@ export function PlayerControls({
 
         {/* Processing indicator */}
         {isProcessing && (
-          <ActivityIndicator color="#FFD700" size="small" style={styles.spinner} />
+          <ActivityIndicator
+            color="#FFD700"
+            size="small"
+            style={styles.spinner}
+          />
         )}
       </View>
     </View>

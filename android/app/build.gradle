@@ -69,13 +69,6 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-
-    // Include bundled whisper JNI .so files
-    sourceSets {
-        main {
-            jniLibs.srcDirs = ['src/main/jniLibs']
-        }
-    }
 }
 
 dependencies {

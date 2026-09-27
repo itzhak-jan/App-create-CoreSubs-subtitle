@@ -14,7 +14,9 @@ if (!NLLBTranslationModule) {
  * modelPath: absolute path to the .tflite model file on device.
  */
 export async function initTranslation(modelPath: string): Promise<void> {
-  if (!NLLBTranslationModule) return;
+  if (!NLLBTranslationModule) {
+    return;
+  }
   await NLLBTranslationModule.init(modelPath, 'eng_Latn', 'heb_Hebr');
 }
 

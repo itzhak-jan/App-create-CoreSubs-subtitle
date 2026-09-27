@@ -1,0 +1,27 @@
+{
+  "_readme": "Fetched at runtime by src/services/ModelManifest.ts (raw content from the main branch). Bump an asset's 'version' whenever you change its 'url' — that's the only signal the app uses to detect an available update. WARNING: the 'nllb' entry's URL is not a verified working download (see ModelManifest.ts header) — replace it with a real self-hosted conversion before relying on translation in production.",
+  "whisper": {
+    "family": "whisper-ggml",
+    "version": "1.0.0",
+    "filename": "ggml-base.en.bin",
+    "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+    "sizeBytes": 147964211,
+    "dir": "models"
+  },
+  "nllb": {
+    "family": "nllb-200",
+    "version": "1.0.0",
+    "filename": "nllb-200-distilled-600M-int8.tflite",
+    "url": "https://huggingface.co/facebook/nllb-200-distilled-600M/resolve/main/model.tflite",
+    "sizeBytes": 310000000,
+    "dir": "models"
+  },
+  "font": {
+    "family": "rubik-font",
+    "version": "1.0.0",
+    "filename": "Rubik-Regular.ttf",
+    "url": "https://github.com/google/fonts/raw/main/ofl/rubik/Rubik-Regular.ttf",
+    "sizeBytes": 138000,
+    "dir": "fonts"
+  }
+}

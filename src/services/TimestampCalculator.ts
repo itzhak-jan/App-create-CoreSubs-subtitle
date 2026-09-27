@@ -28,13 +28,15 @@ export function findActiveCue(
   cues: SubtitleCue[],
   mediaTimeSec: number,
 ): SubtitleCue | null {
-  if (cues.length === 0) return null;
+  if (cues.length === 0) {
+    return null;
+  }
 
   let lo = 0;
   let hi = cues.length - 1;
 
   while (lo <= hi) {
-    const mid = (lo + hi) >>> 1;
+    const mid = Math.floor((lo + hi) / 2);
     const cue = cues[mid];
     if (mediaTimeSec < cue.startTime) {
       hi = mid - 1;
@@ -48,7 +50,10 @@ export function findActiveCue(
 }
 
 /** Returns the chunk index for a given media position and chunk duration. */
-export function chunkIndexForTime(mediaSec: number, chunkDuration: number): number {
+export function chunkIndexForTime(
+  mediaSec: number,
+  chunkDuration: number,
+): number {
   return Math.floor(mediaSec / chunkDuration);
 }
 

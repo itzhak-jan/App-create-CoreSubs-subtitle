@@ -1,17 +1,19 @@
 /**
- * ModelSetupScreen — first-launch onboarding screen.
+ * ModelSetupScreen — first-launch onboarding screen, and the "update
+ * available" screen (via the `onlyKeys` prop restricting which assets are
+ * shown/downloaded).
  *
- * Downloads all three runtime assets to DocumentDirectory:
- *   1. ggml-base.en.bin      — Whisper STT model  (~148 MB)
- *   2. nllb-200-…int8.tflite — NLLB translation    (~310 MB)
- *   3. Rubik-Regular.ttf     — Hebrew font for export (~140 KB)
+ * Downloads runtime assets described by the manifest (src/services/
+ * ModelManifest.ts) to DocumentDirectory:
+ *   1. Whisper STT model     (~148 MB)
+ *   2. NLLB translation model (~310 MB)
+ *   3. Rubik-Regular.ttf Hebrew font for export (~140 KB)
  *
  * None of these are bundled in the APK. Downloading at runtime keeps the
- * repository and CI artefacts lightweight. The screen is shown exactly once;
- * App.tsx checks asset presence on every launch and skips setup if all three
- * files are already present and correctly sized.
+ * repository and CI artefacts lightweight, and lets a newer checkpoint be
+ * rolled out by editing models-manifest.json — no app update needed.
  */
-import React, {useState, useCallback} from 'react';
+import React, {useState, useCallback, useMemo} from 'react';
 import {
   View,
   Text,
@@ -19,22 +21,16 @@ import {
   StyleSheet,
   ScrollView,
 } from 'react-native';
-import {
-  WHISPER_MODEL,
-  NLLB_MODEL,
-  RUBIK_FONT,
-  downloadModel,
-  isModelPresent,
-  type ModelInfo,
-} from '../../services/ModelSetupService';
+import type {
+  ManifestAsset,
+  ManifestKey,
+  ModelManifest,
+} from '../../services/ModelManifest';
+import {downloadModel, isModelPresent} from '../../services/ModelSetupService';
 
-type DownloadPhase =
-  | 'idle'
-  | 'downloading_whisper'
-  | 'downloading_nllb'
-  | 'downloading_font'
-  | 'done'
-  | 'error';
+type DownloadPhase = 'idle' | ManifestKey | 'done' | 'error';
+
+const ALL_KEYS: ManifestKey[] = ['whisper', 'nllb', 'font'];
 
 interface AssetProgress {
   bytes: number;
@@ -42,17 +38,45 @@ interface AssetProgress {
 }
 
 interface ModelSetupScreenProps {
+  manifest: ModelManifest;
   onComplete: () => void;
+  /** Restrict to a subset of assets — used by the "update available" flow
+   *  to re-download only the outdated ones. Defaults to all three. */
+  onlyKeys?: ManifestKey[];
 }
+
+const ASSET_LABELS: Record<
+  ManifestKey,
+  {label: string; describe: (a: ManifestAsset) => string}
+> = {
+  whisper: {
+    label: 'Whisper STT',
+    describe: a =>
+      `Speech-to-text model  •  ${a.family}  •  ~${Math.round(
+        a.sizeBytes / 1_000_000,
+      )} MB`,
+  },
+  nllb: {
+    label: 'NLLB Translation',
+    describe: a =>
+      `English → Hebrew  •  ${a.family}  •  ~${Math.round(
+        a.sizeBytes / 1_000_000,
+      )} MB`,
+  },
+  font: {
+    label: 'Hebrew Font',
+    describe: a =>
+      `${a.filename} for subtitle export  •  ~${Math.round(
+        a.sizeBytes / 1_000,
+      )} KB`,
+  },
+};
 
 function ProgressBar({ratio}: {ratio: number}): React.JSX.Element {
   return (
     <View style={styles.progressTrack}>
       <View
-        style={[
-          styles.progressFill,
-          {width: `${Math.min(100, ratio * 100)}%`},
-        ]}
+        style={[styles.progressFill, {width: `${Math.min(100, ratio * 100)}%`}]}
       />
     </View>
   );
@@ -77,7 +101,9 @@ function AssetRow({
       <View style={styles.assetHeader}>
         <Text style={styles.assetLabel}>{label}</Text>
         {done && <Text style={styles.checkmark}>✓</Text>}
-        {active && !done && <Text style={styles.activeLabel}>Downloading…</Text>}
+        {active && !done && (
+          <Text style={styles.activeLabel}>Downloading…</Text>
+        )}
       </View>
       <Text style={styles.assetDesc}>{description}</Text>
       <ProgressBar ratio={ratio} />
@@ -85,102 +111,101 @@ function AssetRow({
   );
 }
 
-export function ModelSetupScreen({onComplete}: ModelSetupScreenProps): React.JSX.Element {
+export function ModelSetupScreen({
+  manifest,
+  onComplete,
+  onlyKeys,
+}: ModelSetupScreenProps): React.JSX.Element {
+  const keys = useMemo(() => onlyKeys ?? ALL_KEYS, [onlyKeys]);
+  const isUpdate = !!onlyKeys;
+
   const [phase, setPhase] = useState<DownloadPhase>('idle');
   const [errorMsg, setErrorMsg] = useState('');
+  const [progress, setProgress] = useState<Record<ManifestKey, AssetProgress>>(
+    () => {
+      const initial = {} as Record<ManifestKey, AssetProgress>;
+      for (const key of keys) {
+        initial[key] = {bytes: 0, total: manifest[key].sizeBytes};
+      }
+      return initial;
+    },
+  );
 
-  const [whisperProg, setWhisperProg] = useState<AssetProgress>({
-    bytes: 0,
-    total: WHISPER_MODEL.sizeBytes,
-  });
-  const [nllbProg, setNllbProg] = useState<AssetProgress>({
-    bytes: 0,
-    total: NLLB_MODEL.sizeBytes,
-  });
-  const [fontProg, setFontProg] = useState<AssetProgress>({
-    bytes: 0,
-    total: RUBIK_FONT.sizeBytes,
-  });
+  const setAssetProgress = useCallback((key: ManifestKey, p: AssetProgress) => {
+    setProgress(prev => ({...prev, [key]: p}));
+  }, []);
 
   const downloadAsset = useCallback(
-    async (
-      model: ModelInfo,
-      phaseLabel: DownloadPhase,
-      setProgress: (p: AssetProgress) => void,
-    ) => {
-      const present = await isModelPresent(model);
-      if (present) {
-        setProgress({bytes: model.sizeBytes, total: model.sizeBytes});
+    async (key: ManifestKey) => {
+      const asset = manifest[key];
+      const present = await isModelPresent(asset);
+      if (present && !isUpdate) {
+        setAssetProgress(key, {bytes: asset.sizeBytes, total: asset.sizeBytes});
         return;
       }
-      setPhase(phaseLabel);
-      await downloadModel(model, (bytes, contentLength) =>
-        setProgress({
+      setPhase(key);
+      await downloadModel(key, asset, (bytes, contentLength) =>
+        setAssetProgress(key, {
           bytes,
-          total: contentLength > 0 ? contentLength : model.sizeBytes,
+          total: contentLength > 0 ? contentLength : asset.sizeBytes,
         }),
       );
-      // Mark as fully complete regardless of reported contentLength
-      setProgress({bytes: model.sizeBytes, total: model.sizeBytes});
+      setAssetProgress(key, {bytes: asset.sizeBytes, total: asset.sizeBytes});
     },
-    [],
+    [manifest, isUpdate, setAssetProgress],
   );
 
   const downloadAll = useCallback(async () => {
     setErrorMsg('');
     try {
-      await downloadAsset(WHISPER_MODEL, 'downloading_whisper', setWhisperProg);
-      await downloadAsset(NLLB_MODEL, 'downloading_nllb', setNllbProg);
-      await downloadAsset(RUBIK_FONT, 'downloading_font', setFontProg);
+      for (const key of keys) {
+        await downloadAsset(key);
+      }
       setPhase('done');
       onComplete();
     } catch (e) {
       setPhase('error');
       setErrorMsg(String(e));
     }
-  }, [downloadAsset, onComplete]);
+  }, [keys, downloadAsset, onComplete]);
 
-  const isActive =
-    phase === 'downloading_whisper' ||
-    phase === 'downloading_nllb' ||
-    phase === 'downloading_font';
+  const isActive = keys.includes(phase as ManifestKey);
 
   const btnLabel =
     phase === 'idle'
-      ? 'Download & Continue'
+      ? isUpdate
+        ? 'Update & Continue'
+        : 'Download & Continue'
       : phase === 'error'
-        ? 'Retry'
-        : 'Downloading…';
+      ? 'Retry'
+      : 'Downloading…';
+
+  const totalMB = Math.round(
+    keys.reduce((sum, key) => sum + manifest[key].sizeBytes, 0) / 1_000_000,
+  );
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.logo}>CoreSubs</Text>
-      <Text style={styles.title}>First-Time Setup</Text>
+      <Text style={styles.title}>
+        {isUpdate ? 'Model Update Available' : 'First-Time Setup'}
+      </Text>
       <Text style={styles.subtitle}>
         All AI processing runs entirely on-device.{'\n'}
-        Download the models once — nothing leaves your phone.
+        {isUpdate
+          ? 'A newer version of one or more models is available.'
+          : 'Download the models once — nothing leaves your phone.'}
       </Text>
 
-      <AssetRow
-        label="Whisper STT"
-        description="Speech-to-text model  •  ggml-base.en  •  ~148 MB"
-        progress={whisperProg}
-        active={phase === 'downloading_whisper'}
-      />
-
-      <AssetRow
-        label="NLLB Translation"
-        description="English → Hebrew  •  INT8 quantized  •  ~310 MB"
-        progress={nllbProg}
-        active={phase === 'downloading_nllb'}
-      />
-
-      <AssetRow
-        label="Hebrew Font"
-        description="Rubik-Regular.ttf for subtitle export  •  ~140 KB"
-        progress={fontProg}
-        active={phase === 'downloading_font'}
-      />
+      {keys.map(key => (
+        <AssetRow
+          key={key}
+          label={ASSET_LABELS[key].label}
+          description={ASSET_LABELS[key].describe(manifest[key])}
+          progress={progress[key]}
+          active={phase === key}
+        />
+      ))}
 
       {phase === 'error' && (
         <Text style={styles.errorText}>Error: {errorMsg}</Text>
@@ -196,7 +221,7 @@ export function ModelSetupScreen({onComplete}: ModelSetupScreenProps): React.JSX
 
       <Text style={styles.hint}>
         Requires a network connection. All files are saved locally and never
-        uploaded. Total download: ~458 MB.
+        uploaded. Total download: ~{totalMB} MB.
       </Text>
     </ScrollView>
   );

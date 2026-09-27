@@ -27,7 +27,9 @@ export function SubtitleOverlay(): React.JSX.Element | null {
 
   const animStyle = useAnimatedStyle(() => ({opacity: opacity.value}));
 
-  if (!showSubtitles) return null;
+  if (!showSubtitles) {
+    return null;
+  }
 
   return (
     <Animated.View style={[styles.container, animStyle]} pointerEvents="none">
@@ -61,7 +63,13 @@ const styles = StyleSheet.create({
   },
   text: {
     color: '#FFFFFF',
-    fontFamily: 'NotoSansHebrew-Regular',
+    // No fontFamily override: a custom font can't be wired into RN's Text
+    // component on Android just by sitting in DocumentDirectory (it would
+    // need to be bundled under android/assets/fonts/ at build time, which
+    // the project intentionally avoids — see ModelSetupService.ts). Leaving
+    // this unset falls back to the system font, which resolves Hebrew
+    // glyphs via Android's built-in Noto Sans Hebrew fallback. Rubik is
+    // used only for the burned-in export video, via ffmpeg's fontsdir.
     lineHeight: 28,
     letterSpacing: 0.2,
   },

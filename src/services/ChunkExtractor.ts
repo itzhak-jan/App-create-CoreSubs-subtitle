@@ -33,23 +33,36 @@ export async function extractChunk(
 
   // -ss before -i for fast stream seek; -t caps chunk duration
   // -ar 16000 -ac 1 -c:a pcm_s16le satisfies whisper.cpp input requirements
-  const cmd = [
-    '-ss', String(startSec),
-    '-i', videoUri,
-    '-t', String(durationSec),
-    '-ar', '16000',
-    '-ac', '1',
-    '-c:a', 'pcm_s16le',
+  //
+  // executeWithArguments (not execute(string)) — videoUri/outPath come from
+  // DocumentPicker's copyTo, which preserves the original filename, so a
+  // space in the source filename (e.g. "My Trip.mp4") would otherwise be
+  // split by execute()'s whitespace tokeniser and break the command.
+  const args = [
+    '-ss',
+    String(startSec),
+    '-i',
+    videoUri,
+    '-t',
+    String(durationSec),
+    '-ar',
+    '16000',
+    '-ac',
+    '1',
+    '-c:a',
+    'pcm_s16le',
     '-vn',
     outPath,
-  ].join(' ');
+  ];
 
-  const session = await FFmpegKit.execute(cmd);
+  const session = await FFmpegKit.executeWithArguments(args);
   const rc = await session.getReturnCode();
 
   if (!ReturnCode.isSuccess(rc)) {
     const logs = await session.getAllLogsAsString();
-    throw new Error(`FFmpeg chunk extraction failed (chunk ${chunkIndex}): ${logs}`);
+    throw new Error(
+      `FFmpeg chunk extraction failed (chunk ${chunkIndex}): ${logs}`,
+    );
   }
 
   return outPath;

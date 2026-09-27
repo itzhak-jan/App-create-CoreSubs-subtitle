@@ -4,7 +4,8 @@ import {CameraRoll} from '@react-native-camera-roll/camera-roll';
 import type {SubtitleCue} from '../types';
 import {writeSRTFile} from '../utils/srtUtils';
 import {useSubtitleStore} from '../store/subtitleStore';
-import {RUBIK_FONT, modelPath} from './ModelSetupService';
+import {modelPath, MODELS_DIR, FONTS_DIR} from './ModelSetupService';
+import {getCachedManifest} from './ModelManifest';
 
 const EXPORT_DIR = `${RNFS.CachesDirectoryPath}/coresubs_export`;
 
@@ -21,9 +22,9 @@ const EXPORT_DIR = `${RNFS.CachesDirectoryPath}/coresubs_export`;
  *        renders the glyphs
  *     → libass composites the subtitle onto the decoded video frame
  *
- * Font path: RUBIK_FONT is downloaded by ModelSetupScreen at first launch.
- *   fontsdir points to DocumentDirectory/fonts/ — the same directory where
- *   the font was saved. No APK-bundled assets are needed.
+ * Font path: the font manifest asset is downloaded by ModelSetupScreen at
+ *   first launch. fontsdir points to the same directory it was saved to
+ *   (DocumentDirectory/fonts/ by default). No APK-bundled assets are needed.
  *
  * Why executeWithArguments:
  *   FFmpegKit.execute(string) splits on whitespace; the subtitles filter
@@ -51,9 +52,12 @@ export async function exportWithSubtitles(
     setExportState({status: 'encoding', progress: 5});
 
     // ── Step 2: Verify the font was downloaded ───────────────────────────────
-    // The font lives at DocumentDirectory/fonts/Rubik-Regular.ttf, written
-    // by ModelSetupScreen on first launch. No copy from assets is needed.
-    const fontFilePath = modelPath(RUBIK_FONT);
+    // The font lives at DocumentDirectory/fonts/<filename>, written by
+    // ModelSetupScreen on first launch. No copy from assets is needed.
+    // getCachedManifest() is populated by App.tsx at startup before the user
+    // can ever reach the export screen, so this never needs a network call.
+    const fontAsset = getCachedManifest().font;
+    const fontFilePath = modelPath(fontAsset);
     if (!(await RNFS.exists(fontFilePath))) {
       throw new Error(
         'Hebrew font not found. Please complete the first-time setup before exporting.',
@@ -61,7 +65,7 @@ export async function exportWithSubtitles(
     }
     // fontsdir is the directory containing the TTF; libass resolves fonts by
     // family name within that directory.
-    const fontsDirPath = RUBIK_FONT.dir;
+    const fontsDirPath = fontAsset.dir === 'fonts' ? FONTS_DIR : MODELS_DIR;
 
     // ── Step 3: Build the subtitles filter ───────────────────────────────────
     //
@@ -92,13 +96,19 @@ export async function exportWithSubtitles(
     //   Faster than libx264 software encode on Tensor G4; LGPL-compatible
     //   so it works with the "video" ffmpeg-kit package (no GPL needed).
     const args = [
-      '-i',        videoUri,
-      '-vf',       vfFilter,
-      '-c:v',      'h264_mediacodec',
-      '-b:v',      '4M',
-      '-c:a',      'copy',
-      '-movflags', '+faststart',
-                   outputPath,
+      '-i',
+      videoUri,
+      '-vf',
+      vfFilter,
+      '-c:v',
+      'h264_mediacodec',
+      '-b:v',
+      '4M',
+      '-c:a',
+      'copy',
+      '-movflags',
+      '+faststart',
+      outputPath,
     ];
 
     // ── Step 5: Progress callback ─────────────────────────────────────────────
@@ -111,7 +121,7 @@ export async function exportWithSubtitles(
 
     // ── Step 6: Execute ───────────────────────────────────────────────────────
     const session = await FFmpegKit.executeWithArguments(args);
-    FFmpegKitConfig.enableStatisticsCallback(null);
+    FFmpegKitConfig.enableStatisticsCallback(() => {});
 
     const rc = await session.getReturnCode();
     if (!ReturnCode.isSuccess(rc)) {
@@ -125,12 +135,14 @@ export async function exportWithSubtitles(
 
     setExportState({status: 'done', progress: 100, outputPath});
   } catch (err) {
-    FFmpegKitConfig.enableStatisticsCallback(null);
+    FFmpegKitConfig.enableStatisticsCallback(() => {});
     setExportState({status: 'error', progress: 0, error: String(err)});
     throw err;
   } finally {
     RNFS.exists(srtPath).then(exists => {
-      if (exists) RNFS.unlink(srtPath);
+      if (exists) {
+        RNFS.unlink(srtPath);
+      }
     });
   }
 }
