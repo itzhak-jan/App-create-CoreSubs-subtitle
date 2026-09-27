@@ -6,7 +6,7 @@
  * Downloads runtime assets described by the manifest (src/services/
  * ModelManifest.ts) to DocumentDirectory:
  *   1. Whisper STT model                (~148 MB)
- *   2. TranslateGemma-4B translation model (size TBD — see ModelManifest.ts)
+ *   2. Translation model, currently Gemma3-1B-IT (~555 MB — see ModelManifest.ts)
  *
  * (No font download: subtitle export renders text via Android's own
  * Canvas/StaticLayout, not a custom font file — see SubtitleExportModule.kt.)

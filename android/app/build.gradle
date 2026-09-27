@@ -75,8 +75,9 @@ dependencies {
     implementation("com.facebook.react:react-android")
     implementation("com.facebook.react:hermes-android")
 
-    // MediaPipe LLM Inference ("Task Genai") — runs TranslateGemma-4B for
-    // on-device English->Hebrew translation. Bundles its own LiteRT runtime
+    // MediaPipe LLM Inference ("Task Genai") — runs the translator model
+    // (currently Gemma3-1B-IT, see TranslatorModule.kt) for on-device
+    // English->Hebrew translation. Bundles its own LiteRT runtime
     // and GPU/NPU dispatch; no separate TFLite/NNAPI delegate wiring needed
     // (see TranslatorModule.kt for why this replaced a raw TFLite approach).
     implementation 'com.google.mediapipe:tasks-genai:0.10.27'

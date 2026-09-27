@@ -11,7 +11,7 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * React Native bridge to Google's TranslateGemma-4B, run through the
+ * React Native bridge to a Gemma 3 instruct model, run through the
  * MediaPipe LLM Inference ("Task Genai") API. Deliberately thin: prompt
  * construction (translation prompts with glossary hints, glossary
  * extraction prompts) lives in TypeScript (TranslationService.ts,
@@ -22,32 +22,38 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Why this replaced a raw TFLite Interpreter + NLLB-200 approach: there is
  * no verified, stably-hosted NLLB-200 TFLite conversion — Meta only
  * publishes NLLB as PyTorch checkpoints, and the community conversions
- * found are CTranslate2/ONNX, not TFLite (see ModelManifest.ts). Google
- * officially publishes TranslateGemma as a LiteRT-converted .task bundle
- * under the `litert-community` org, ready for the LLM Inference API — no
- * custom tokenizer/encoder-decoder loop to hand-roll (the task handles
- * tokenisation internally), at the cost of a much larger download (a 4B
- * parameter model vs. NLLB's 600M).
+ * found are CTranslate2/ONNX, not TFLite (see ModelManifest.ts).
+ *
+ * Model history: originally targeted TranslateGemma-4B (translation-
+ * specialized), but Google never published an Android/mobile .task or
+ * .litertlm bundle for it — only a "-web.task" (MediaPipe Web/Wasm,
+ * incompatible with this API), and the one community Android conversion
+ * found ships a different runtime (LiteRT-LM's .litertlm, not this app's
+ * MediaPipe Task Genai API) and has a reported GPU padding-only-output bug.
+ * Switched to litert-community/Gemma3-1B-IT — a general-purpose instruct
+ * model (not translation-specialized, so output quality depends on the
+ * prompt in TranslationService.ts rather than fine-tuning), whose README
+ * explicitly confirms Android + MediaPipe LLM Inference support in the same
+ * .task format this module already expects. See ModelManifest.ts header for
+ * the full history and what's still unconfirmed (license gating).
  *
  * UNVERIFIED — confirm before shipping (this session's sandbox couldn't
  * browse huggingface.co to check; see ModelManifest.ts header):
- *   - The exact filename/size of the Android-usable .task bundle under
- *     litert-community/TranslateGemma-4B-IT. Search results surfaced a
- *     "-web.task" variant for MediaPipe *web*, which is NOT this API —
- *     confirm there's a mobile/Android bundle before pointing the manifest
- *     at it.
+ *   - A live HTTP check of the Gemma3-1B-IT URL itself — cross-referenced
+ *     across independent search results (filename, size, Android-ready
+ *     confirmation), but never fetched directly.
  *   - Whether the download is gated behind a Gemma license acceptance /
  *     HuggingFace account. If so, an anonymous RNFS.downloadFile() won't
  *     work — either self-host a copy after accepting the license once
  *     yourself, or add an Authorization header (ManifestAsset would need
  *     an optional `headers` field; not implemented here since it's
  *     unneeded until the gating question is settled).
- *   - The model's official prompt/chat template for translation
- *     (google/translategemma-4b-it ships a chat_template.jinja) — the
- *     prompts built in TranslationService.ts are a reasonable
- *     instruction-style guess, not copied from that file. Mismatched
- *     formatting will still produce output, just with lower quality than
- *     the model is capable of.
+ *   - There's no official translation-specific prompt/chat template to
+ *     match here (Gemma3-1B-IT is general-purpose) — the prompts built in
+ *     TranslationService.ts are a reasonable instruction-style guess, not
+ *     copied from a translation-tuned template. Mismatched formatting will
+ *     still produce output, just with lower quality than a translation-
+ *     specialized model would give.
  *
  * Hardware notes for Pixel 10 Pro XL: the LLM Inference API dispatches to
  * GPU/NPU automatically where supported by the backend build; no manual

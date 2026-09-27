@@ -209,7 +209,7 @@ class JITProcessor {
       }
       upsertChunk({...chunk, status: 'translating', wavPath});
 
-      // ── Step 3: Translation (TranslateGemma) ──────────────────────────────
+      // ── Step 3: Translation (Gemma3-1B-IT) ─────────────────────────────────
       if (gen !== this.generation) {
         return;
       }

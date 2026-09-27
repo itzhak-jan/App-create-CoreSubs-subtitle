@@ -1,5 +1,5 @@
 {
-  "_readme": "Fetched at runtime by src/services/ModelManifest.ts (raw content from the main branch). Bump an asset's 'version' whenever you change its 'url' — that's the only signal the app uses to detect an available update. WARNING: the 'translator' entry's url/sizeBytes are placeholders — this session's sandbox could not browse huggingface.co to confirm the exact Android .task filename, its real size, or whether the download is gated behind a Gemma license acceptance. Confirm at huggingface.co/litert-community/TranslateGemma-4B-IT before relying on translation in production (see ModelManifest.ts and TranslatorModule.kt for detail).",
+  "_readme": "Fetched at runtime by src/services/ModelManifest.ts (raw content from the main branch). Bump an asset's 'version' whenever you change its 'url' — that's the only signal the app uses to detect an available update. NOTE on 'translator': Gemma3-1B-IT, chosen because it's explicitly documented as Android + MediaPipe LLM Inference ready (unlike TranslateGemma, which has no official mobile bundle). Filename/size cross-checked across independent sources but this environment's network policy blocks huggingface.co directly, so the URL itself hasn't had a live HTTP check, and it's unconfirmed whether the download requires an accepted Gemma license via a logged-in HuggingFace session. See ModelManifest.ts and TranslatorModule.kt for full detail.",
   "whisper": {
     "family": "whisper-ggml",
     "version": "1.0.0",
@@ -9,11 +9,11 @@
     "dir": "models"
   },
   "translator": {
-    "family": "translategemma-4b",
-    "version": "1.0.0",
-    "filename": "translategemma-4b-it.task",
-    "url": "https://huggingface.co/litert-community/TranslateGemma-4B-IT/resolve/main/translategemma-4b-it.task",
-    "sizeBytes": 2800000000,
+    "family": "gemma3-1b",
+    "version": "2.0.0",
+    "filename": "Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task",
+    "url": "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task",
+    "sizeBytes": 555000000,
     "dir": "models"
   }
 }

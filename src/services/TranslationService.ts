@@ -12,7 +12,8 @@ if (!TranslatorModule) {
 
 /**
  * Initialise the on-device translator (call once at app startup).
- * modelPath: absolute path to the TranslateGemma .task bundle on device.
+ * modelPath: absolute path to the translator .task bundle on device
+ * (currently Gemma3-1B-IT — see ModelManifest.ts).
  */
 export async function initTranslation(modelPath: string): Promise<void> {
   if (!TranslatorModule) {
