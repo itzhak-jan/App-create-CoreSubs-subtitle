@@ -5,8 +5,8 @@
  *
  * Downloads runtime assets described by the manifest (src/services/
  * ModelManifest.ts) to DocumentDirectory:
- *   1. Whisper STT model     (~148 MB)
- *   2. NLLB translation model (~310 MB)
+ *   1. Whisper STT model                (~148 MB)
+ *   2. TranslateGemma-4B translation model (size TBD — see ModelManifest.ts)
  *   3. Rubik-Regular.ttf Hebrew font for export (~140 KB)
  *
  * None of these are bundled in the APK. Downloading at runtime keeps the
@@ -30,7 +30,7 @@ import {downloadModel, isModelPresent} from '../../services/ModelSetupService';
 
 type DownloadPhase = 'idle' | ManifestKey | 'done' | 'error';
 
-const ALL_KEYS: ManifestKey[] = ['whisper', 'nllb', 'font'];
+const ALL_KEYS: ManifestKey[] = ['whisper', 'translator', 'font'];
 
 interface AssetProgress {
   bytes: number;
@@ -56,8 +56,8 @@ const ASSET_LABELS: Record<
         a.sizeBytes / 1_000_000,
       )} MB`,
   },
-  nllb: {
-    label: 'NLLB Translation',
+  translator: {
+    label: 'AI Translation',
     describe: a =>
       `English → Hebrew  •  ${a.family}  •  ~${Math.round(
         a.sizeBytes / 1_000_000,

@@ -77,7 +77,7 @@ async function writeInstalledVersion(
 export async function checkForUpdates(
   manifest: ModelManifest,
 ): Promise<ManifestKey[]> {
-  const keys: ManifestKey[] = ['whisper', 'nllb', 'font'];
+  const keys: ManifestKey[] = ['whisper', 'translator', 'font'];
   const installed = await readInstalledVersions();
   const outdated: ManifestKey[] = [];
 

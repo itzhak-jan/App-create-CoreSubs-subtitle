@@ -53,13 +53,13 @@ export default function App(): React.JSX.Element {
     const m = await fetchManifest();
     setManifest(m);
 
-    const [whisperOk, nllbOk, fontOk] = await Promise.all([
+    const [whisperOk, translatorOk, fontOk] = await Promise.all([
       isModelPresent(m.whisper),
-      isModelPresent(m.nllb),
+      isModelPresent(m.translator),
       isModelPresent(m.font),
     ]);
 
-    if (!whisperOk || !nllbOk || !fontOk) {
+    if (!whisperOk || !translatorOk || !fontOk) {
       setAppPhase('setup');
       return;
     }
@@ -76,7 +76,7 @@ export default function App(): React.JSX.Element {
   async function initModels(m: ModelManifest) {
     try {
       await initWhisper(modelPath(m.whisper));
-      await initTranslation(modelPath(m.nllb));
+      await initTranslation(modelPath(m.translator));
     } catch (e) {
       console.error('[App] Model init error:', e);
     }

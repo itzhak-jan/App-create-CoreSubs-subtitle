@@ -3,8 +3,8 @@
  * what version.
  *
  * Why a remote manifest instead of hardcoded URLs:
- *   Swapping in a better checkpoint (e.g. a newer NLLB distillation, or a
- *   Whisper model fine-tuned for a specific accent) used to mean shipping a
+ *   Swapping in a better checkpoint (e.g. a newer TranslateGemma release,
+ *   or a Whisper model fine-tuned for a specific accent) used to mean shipping a
  *   new app build. With the manifest hosted as a plain JSON file in this
  *   repo, updating the recommended model is a one-line edit + git push —
  *   every install picks it up next time it checks, no app-store release
@@ -17,17 +17,20 @@
  *      manifest we fetched successfully in this process, or — on the very
  *      first run — DEFAULT_MANIFEST below.
  *
- * IMPORTANT — the `nllb` entry's URL is not a verified, working download:
- *   there is no officially hosted NLLB-200 TFLite conversion at a stable
- *   public URL as of this writing (Meta only publishes NLLB as PyTorch
- *   checkpoints; community conversions found so far are CTranslate2/ONNX,
- *   not TFLite). Ship a self-converted, self-hosted file and update
- *   models-manifest.json (repo root) with its real URL/size/version before
- *   relying on translation in production — see the NLLBTranslationModule.kt
- *   header comment for what the conversion needs to produce.
+ * IMPORTANT — the `translator` entry below is a placeholder, not a
+ *   verified working download. It points at the right HuggingFace org
+ *   (litert-community/TranslateGemma-4B-IT — a real, Google-published
+ *   LiteRT conversion of TranslateGemma-4B, confirmed via web search to
+ *   support Hebrew) but this session's sandbox could not browse
+ *   huggingface.co (network egress policy) to confirm the exact Android
+ *   .task filename, its real size, or whether the download is gated
+ *   behind a Gemma license acceptance. Before relying on translation in
+ *   production: open that HF page yourself, get the exact file, and update
+ *   models-manifest.json's `translator.url`/`sizeBytes`/`version`. See
+ *   TranslatorModule.kt's header comment for the full detail.
  */
 export interface ManifestAsset {
-  /** Model family, e.g. "whisper-ggml", "nllb-200", "rubik-font". Purely
+  /** Model family, e.g. "whisper-ggml", "translategemma-4b", "rubik-font". Purely
    *  informational — lets a future manifest swap in a sibling checkpoint
    *  from the same family without the app needing to know the difference. */
   family: string;
@@ -43,7 +46,7 @@ export interface ManifestAsset {
 
 export interface ModelManifest {
   whisper: ManifestAsset;
-  nllb: ManifestAsset;
+  translator: ManifestAsset;
   font: ManifestAsset;
 }
 
@@ -70,14 +73,18 @@ export const DEFAULT_MANIFEST: ModelManifest = {
     sizeBytes: 147_964_211,
     dir: 'models',
   },
-  nllb: {
-    family: 'nllb-200',
+  translator: {
+    family: 'translategemma-4b',
     version: '1.0.0',
-    filename: 'nllb-200-distilled-600M-int8.tflite',
-    // NOT VERIFIED — see file header. Replace with a real self-hosted
-    // conversion before shipping; bump `version` when you do.
-    url: 'https://huggingface.co/facebook/nllb-200-distilled-600M/resolve/main/model.tflite',
-    sizeBytes: 310_000_000,
+    filename: 'translategemma-4b-it.task',
+    // PLACEHOLDER — NOT VERIFIED. See file header: confirm the exact
+    // filename, size, and any license gating on huggingface.co/
+    // litert-community/TranslateGemma-4B-IT before shipping, then update
+    // this url/sizeBytes and bump version.
+    url: 'https://huggingface.co/litert-community/TranslateGemma-4B-IT/resolve/main/translategemma-4b-it.task',
+    // Rough estimate for a 4B-parameter model at ~4-bit quantization —
+    // unconfirmed. Replace with the real file size once known.
+    sizeBytes: 2_800_000_000,
     dir: 'models',
   },
   font: {
@@ -102,7 +109,7 @@ function isValidManifest(json: unknown): json is ModelManifest {
     return false;
   }
   const m = json as Partial<ModelManifest>;
-  return ['whisper', 'nllb', 'font'].every(key => {
+  return ['whisper', 'translator', 'font'].every(key => {
     const asset = (m as Record<string, unknown>)[key] as
       | Partial<ManifestAsset>
       | undefined;

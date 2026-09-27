@@ -1,5 +1,5 @@
 {
-  "_readme": "Fetched at runtime by src/services/ModelManifest.ts (raw content from the main branch). Bump an asset's 'version' whenever you change its 'url' — that's the only signal the app uses to detect an available update. WARNING: the 'nllb' entry's URL is not a verified working download (see ModelManifest.ts header) — replace it with a real self-hosted conversion before relying on translation in production.",
+  "_readme": "Fetched at runtime by src/services/ModelManifest.ts (raw content from the main branch). Bump an asset's 'version' whenever you change its 'url' — that's the only signal the app uses to detect an available update. WARNING: the 'translator' entry's url/sizeBytes are placeholders — this session's sandbox could not browse huggingface.co to confirm the exact Android .task filename, its real size, or whether the download is gated behind a Gemma license acceptance. Confirm at huggingface.co/litert-community/TranslateGemma-4B-IT before relying on translation in production (see ModelManifest.ts and TranslatorModule.kt for detail).",
   "whisper": {
     "family": "whisper-ggml",
     "version": "1.0.0",
@@ -8,12 +8,12 @@
     "sizeBytes": 147964211,
     "dir": "models"
   },
-  "nllb": {
-    "family": "nllb-200",
+  "translator": {
+    "family": "translategemma-4b",
     "version": "1.0.0",
-    "filename": "nllb-200-distilled-600M-int8.tflite",
-    "url": "https://huggingface.co/facebook/nllb-200-distilled-600M/resolve/main/model.tflite",
-    "sizeBytes": 310000000,
+    "filename": "translategemma-4b-it.task",
+    "url": "https://huggingface.co/litert-community/TranslateGemma-4B-IT/resolve/main/translategemma-4b-it.task",
+    "sizeBytes": 2800000000,
     "dir": "models"
   },
   "font": {

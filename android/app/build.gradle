@@ -75,13 +75,11 @@ dependencies {
     implementation("com.facebook.react:react-android")
     implementation("com.facebook.react:hermes-android")
 
-    // TFLite for NLLB translation
-    implementation 'org.tensorflow:tensorflow-lite:2.14.0'
-    implementation 'org.tensorflow:tensorflow-lite-gpu:2.14.0'
-    implementation 'org.tensorflow:tensorflow-lite-api:2.14.0'
-
-    // NNAPI delegate (for Tensor G4 NPU)
-    implementation 'org.tensorflow:tensorflow-lite-support:0.4.4'
+    // MediaPipe LLM Inference ("Task Genai") — runs TranslateGemma-4B for
+    // on-device English->Hebrew translation. Bundles its own LiteRT runtime
+    // and GPU/NPU dispatch; no separate TFLite/NNAPI delegate wiring needed
+    // (see TranslatorModule.kt for why this replaced a raw TFLite approach).
+    implementation 'com.google.mediapipe:tasks-genai:0.10.27'
 
     // Kotlin coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
