@@ -25,3 +25,5 @@ allprojects {
         // ffmpeg-kit-react-native publishes to Maven Central
     }
 }
+
+apply plugin: "com.facebook.react.rootproject"
