@@ -6,7 +6,7 @@ const {WhisperModule} = NativeModules;
 if (!WhisperModule) {
   console.warn(
     '[STTService] WhisperModule not found — native build required. ' +
-    'Ensure the Android module is compiled and linked.',
+      'Ensure the Android module is compiled and linked.',
   );
 }
 
@@ -17,7 +17,9 @@ export const WhisperEvents = new NativeEventEmitter(WhisperModule ?? {});
  * modelPath: absolute path to the .gguf model file on device storage.
  */
 export async function initWhisper(modelPath: string): Promise<void> {
-  if (!WhisperModule) return;
+  if (!WhisperModule) {
+    return;
+  }
   await WhisperModule.init(modelPath);
 }
 
@@ -31,8 +33,10 @@ export async function transcribeAudio(wavPath: string): Promise<WhisperResult> {
     return {segments: [], language: 'en'};
   }
 
-  const raw: {segments: Array<{t0: number; t1: number; text: string}>; language: string} =
-    await WhisperModule.transcribe(wavPath);
+  const raw: {
+    segments: Array<{t0: number; t1: number; text: string}>;
+    language: string;
+  } = await WhisperModule.transcribe(wavPath);
 
   return {
     segments: raw.segments.map(s => ({

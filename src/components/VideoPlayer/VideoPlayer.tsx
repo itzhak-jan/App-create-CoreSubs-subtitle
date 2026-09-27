@@ -1,5 +1,10 @@
 import React, {useCallback, useRef} from 'react';
-import {StyleSheet, View, TouchableWithoutFeedback, StatusBar} from 'react-native';
+import {
+  StyleSheet,
+  View,
+  TouchableWithoutFeedback,
+  StatusBar,
+} from 'react-native';
 import Video, {type VideoRef} from 'react-native-video';
 import {useVideoStore} from '../../store/videoStore';
 import {SubtitleOverlay} from './SubtitleOverlay';
@@ -9,13 +14,8 @@ import {jitProcessor} from '../../services/JITProcessor';
 
 const PROGRESS_INTERVAL_MS = 250;
 
-interface VideoPlayerProps {
-  onRequestExport: () => void;
-}
-
-export function VideoPlayer({onRequestExport}: VideoPlayerProps): React.JSX.Element | null {
+export function VideoPlayer(): React.JSX.Element | null {
   const videoRef = useRef<VideoRef>(null);
-  const controlsVisible = useRef(true);
 
   const {
     meta,
@@ -49,20 +49,19 @@ export function VideoPlayer({onRequestExport}: VideoPlayerProps): React.JSX.Elem
     [setDuration, setLoadState, meta],
   );
 
-  const handleSeek = useCallback(
-    (timeSec: number) => {
-      videoRef.current?.seek(timeSec);
-      // Flush pipeline and restart from new position
-      jitProcessor.seek(timeSec);
-    },
-    [],
-  );
+  const handleSeek = useCallback((timeSec: number) => {
+    videoRef.current?.seek(timeSec);
+    // Flush pipeline and restart from new position
+    jitProcessor.seek(timeSec);
+  }, []);
 
   const handleTogglePlay = useCallback(() => {
     setIsPaused(!isPaused);
   }, [isPaused, setIsPaused]);
 
-  if (!meta) return null;
+  if (!meta) {
+    return null;
+  }
 
   return (
     <View style={styles.root}>

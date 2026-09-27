@@ -1,11 +1,5 @@
 import React from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  Alert,
-} from 'react-native';
+import {View, Text, TouchableOpacity, StyleSheet, Alert} from 'react-native';
 import DocumentPicker, {types} from 'react-native-document-picker';
 import {
   check,
@@ -93,14 +87,13 @@ export function FilePicker(): React.JSX.Element {
       resetSubtitles();
 
       // Derive display name
-      const name =
-        result.name?.replace(/\.[^.]+$/, '') ?? 'Video';
+      const name = result.name?.replace(/\.[^.]+$/, '') ?? 'Video';
 
       const uri = result.fileCopyUri ?? result.uri;
 
       setMeta({
         uri,
-        duration: 0,       // updated by VideoPlayer's onLoad
+        duration: 0, // updated by VideoPlayer's onLoad
         displayName: name,
       });
     } catch (err) {
@@ -115,11 +108,16 @@ export function FilePicker(): React.JSX.Element {
       <Text style={styles.logo}>CoreSubs</Text>
       <Text style={styles.tagline}>On-device Hebrew subtitle generation</Text>
 
-      <TouchableOpacity style={styles.btn} onPress={pickVideo} activeOpacity={0.8}>
+      <TouchableOpacity
+        style={styles.btn}
+        onPress={pickVideo}
+        activeOpacity={0.8}>
         <Text style={styles.btnText}>Open Video</Text>
       </TouchableOpacity>
 
-      <Text style={styles.hint}>Supports MP4, MKV, AVI and most common formats</Text>
+      <Text style={styles.hint}>
+        Supports MP4, MKV, AVI and most common formats
+      </Text>
     </View>
   );
 }

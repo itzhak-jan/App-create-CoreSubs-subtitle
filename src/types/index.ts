@@ -57,6 +57,23 @@ export interface TranslationResult {
   hebrewText: string;
 }
 
+// ─── Glossary (running translation-memory for a single video) ────────────────
+
+export type GlossaryCategory = 'person' | 'place' | 'phrase' | 'other';
+
+export interface GlossaryEntry {
+  /** The exact English term/phrase as it appears in Whisper's transcript —
+   *  the stable identifier used to detect this entry's relevance in later
+   *  segments (case-insensitive substring match). */
+  term: string;
+  /** The Hebrew rendering to reuse consistently for this term. */
+  hebrew: string;
+  /** For people — keeps Hebrew's grammatical gender agreement (verbs/
+   *  adjectives) consistent across segments that refer back to them. */
+  gender?: 'm' | 'f';
+  category?: GlossaryCategory;
+}
+
 // ─── Video State ─────────────────────────────────────────────────────────────
 
 export type VideoLoadState = 'idle' | 'loading' | 'ready' | 'error';

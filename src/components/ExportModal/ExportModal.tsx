@@ -9,12 +9,7 @@ import {
   ActivityIndicator,
   Platform,
 } from 'react-native';
-import {
-  check,
-  request,
-  PERMISSIONS,
-  RESULTS,
-} from 'react-native-permissions';
+import {check, request, PERMISSIONS, RESULTS} from 'react-native-permissions';
 import {useSubtitleStore} from '../../store/subtitleStore';
 import {useVideoStore} from '../../store/videoStore';
 import {exportWithSubtitles} from '../../services/ExportService';
@@ -22,7 +17,7 @@ import {exportWithSubtitles} from '../../services/ExportService';
 async function ensureWritePermission(): Promise<boolean> {
   // Android 13+: saving to gallery via CameraRoll needs READ_MEDIA_VIDEO
   // which doubles as write access to MediaStore; no WRITE_EXTERNAL_STORAGE needed.
-  if (Platform.Version < 33) {
+  if (Number(Platform.Version) < 33) {
     const status = await check(PERMISSIONS.ANDROID.WRITE_EXTERNAL_STORAGE);
     if (status !== RESULTS.GRANTED) {
       const req = await request(PERMISSIONS.ANDROID.WRITE_EXTERNAL_STORAGE);
@@ -37,7 +32,10 @@ interface ExportModalProps {
   onClose: () => void;
 }
 
-export function ExportModal({visible, onClose}: ExportModalProps): React.JSX.Element {
+export function ExportModal({
+  visible,
+  onClose,
+}: ExportModalProps): React.JSX.Element {
   const {exportState, getAllCues, setExportState} = useSubtitleStore();
   const {meta} = useVideoStore();
 
@@ -46,11 +44,16 @@ export function ExportModal({visible, onClose}: ExportModalProps): React.JSX.Ele
   );
 
   const handleExport = useCallback(async () => {
-    if (!meta?.uri) return;
+    if (!meta?.uri) {
+      return;
+    }
 
     const granted = await ensureWritePermission();
     if (!granted) {
-      Alert.alert('Permission required', 'Gallery write access is required to save the video.');
+      Alert.alert(
+        'Permission required',
+        'Gallery write access is required to save the video.',
+      );
       return;
     }
 

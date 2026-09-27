@@ -1,0 +1,158 @@
+name: Android Release Build
+
+# ── Triggers ──────────────────────────────────────────────────────────────────
+# Runs automatically on pushes to main.
+# Can also be triggered manually from the Actions tab (workflow_dispatch).
+# No model or font files are downloaded here — they are runtime-only assets
+# fetched by the app on first launch. The build artefact is therefore small
+# and the workflow completes quickly.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel any in-progress run for the same branch to avoid queued builds
+# stacking up when commits land in quick succession.
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      # ── Source ──────────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Node.js ─────────────────────────────────────────────────────────────
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # ── Java ────────────────────────────────────────────────────────────────
+      # React Native 0.74 requires Java 17.
+      - name: Set up Java 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # ── Android SDK / NDK / CMake ───────────────────────────────────────────
+      # ubuntu-latest ships with Android SDK at $ANDROID_HOME.
+      # We install the specific NDK and CMake versions pinned in build.gradle
+      # to guarantee reproducible native builds.
+      - name: Install NDK 26.1.10909125 and CMake 3.22.1
+        run: |
+          ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager \
+            "ndk;26.1.10909125" \
+            "cmake;3.22.1" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+
+      # ── JS dependencies ─────────────────────────────────────────────────────
+      # `npm ci` uses package-lock.json for reproducible installs and is
+      # faster than `npm install` in CI because it skips the resolve phase.
+      - name: Install Node dependencies
+        run: npm ci
+
+      # ── whisper.cpp source ───────────────────────────────────────────────────
+      # The model weights (ggml-base.en.bin) are downloaded at runtime by the
+      # app's setup screen. The C++ inference engine, however, must be compiled
+      # into the APK so the JNI bridge works on-device.
+      #
+      # We clone whisper.cpp at a pinned tag into the cpp directory where
+      # CMakeLists.txt expects it (whisper_src/). The clone is cached by tag
+      # so repeat runs skip the network fetch entirely.
+      #
+      # CMakeLists.txt detects whisper_src/CMakeLists.txt at configure time and
+      # uses add_subdirectory() to compile whisper + GGML as static libraries,
+      # linking them into libwhisper_jni.so. No pre-built .so is required.
+      - name: Cache whisper.cpp source
+        id: cache-whisper
+        uses: actions/cache@v4
+        with:
+          path: android/app/src/main/cpp/whisper_src
+          key: whisper-cpp-v1.7.4
+
+      - name: Clone whisper.cpp v1.7.4
+        if: steps.cache-whisper.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth=1 --branch v1.7.4 \
+            https://github.com/ggerganov/whisper.cpp.git \
+            android/app/src/main/cpp/whisper_src
+
+      # ── Gradle cache ─────────────────────────────────────────────────────────
+      # Cache key covers all Gradle build files. The cache is invalidated
+      # only when dependencies actually change, not on every commit.
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/**/*.gradle*', 'android/gradle.properties', 'android/gradle/wrapper/gradle-wrapper.properties', 'android/app/src/main/cpp/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # ── Debug keystore ───────────────────────────────────────────────────────
+      # The release build config in build.gradle references debug.keystore.
+      # We generate a throw-away keystore here — sufficient for CI artefacts.
+      # For a production-distributed APK, replace this with GitHub Secrets
+      # and a dedicated release keystore.
+      - name: Generate debug keystore for signing
+        run: |
+          keytool -genkeypair -v \
+            -keystore android/app/debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      # ── Build ────────────────────────────────────────────────────────────────
+      # assembleRelease compiles JS (Metro bundler), Kotlin, and the JNI layer.
+      # CMake detects whisper_src/ (cloned above) and builds whisper + GGML as
+      # static libs, linking them into libwhisper_jni.so — no pre-built .so needed.
+      # --no-daemon prevents orphaned Gradle daemon processes in the runner.
+      - name: Build Release APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease \
+            --no-daemon \
+            --stacktrace \
+            -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=512m"
+
+      # ── Artefact upload ──────────────────────────────────────────────────────
+      # The APK is signed with the throw-away debug keystore generated above.
+      # Kept for 14 days so testers can download it from the Actions tab.
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CoreSubs-release-${{ github.sha }}
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      # ── Build summary ────────────────────────────────────────────────────────
+      - name: Write build summary
+        if: always()
+        run: |
+          echo "## CoreSubs Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Native STT | whisper.cpp v1.7.4 compiled from source (arm64-v8a) |" >> $GITHUB_STEP_SUMMARY
+          echo "| AI Models | Downloaded at first launch by ModelSetupScreen |" >> $GITHUB_STEP_SUMMARY
+          echo "| Hebrew Font | Downloaded at first launch by ModelSetupScreen |" >> $GITHUB_STEP_SUMMARY

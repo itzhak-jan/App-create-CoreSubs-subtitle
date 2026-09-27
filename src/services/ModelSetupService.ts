@@ -1,80 +1,126 @@
-/**
- * ModelSetupService — handles first-run model download and verification.
- *
- * Model files are too large to bundle in the APK. On first launch the user
- * must download them. This service handles the download + integrity check.
- *
- * Recommended models:
- *   Whisper: ggml-base.en-q5_1.bin  (~57 MB)  — fast & accurate for English
- *   NLLB:    nllb-200-distilled-600M-int8.tflite (~310 MB) — good EN→HE quality
- *
- * Alternative (smaller) options:
- *   Whisper: ggml-tiny.en-q8_0.bin  (~42 MB)  — faster, lower accuracy
- *   NLLB:    Helsinki-NLP opus-mt-en-he.tflite (~300 MB) — single language pair
- */
-
 import RNFS from 'react-native-fs';
+import type {ManifestAsset, ManifestKey, ModelManifest} from './ModelManifest';
 
 export const MODELS_DIR = `${RNFS.DocumentDirectoryPath}/models`;
+export const FONTS_DIR = `${RNFS.DocumentDirectoryPath}/fonts`;
+const INSTALLED_VERSIONS_PATH = `${RNFS.DocumentDirectoryPath}/.installed_versions.json`;
 
-export interface ModelInfo {
-  filename: string;
-  url: string;
-  sizeBytes: number;
+function dirFor(asset: ManifestAsset): string {
+  return asset.dir === 'fonts' ? FONTS_DIR : MODELS_DIR;
 }
 
-export const WHISPER_MODEL: ModelInfo = {
-  filename: 'ggml-base.en.bin',
-  // Official whisper.cpp model CDN
-  url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin',
-  sizeBytes: 147964211,
-};
+/** Returns the absolute path to a manifest asset's file on device. */
+export function modelPath(asset: ManifestAsset): string {
+  return `${dirFor(asset)}/${asset.filename}`;
+}
 
-export const NLLB_MODEL: ModelInfo = {
-  filename: 'nllb-200-distilled-600M-int8.tflite',
-  // Hosted on HuggingFace — replace with a self-hosted URL for production
-  url: 'https://huggingface.co/facebook/nllb-200-distilled-600M/resolve/main/model.tflite',
-  sizeBytes: 310000000,
-};
-
-export async function ensureModelsDir(): Promise<void> {
-  if (!(await RNFS.exists(MODELS_DIR))) {
-    await RNFS.mkdir(MODELS_DIR);
+async function ensureDir(dir: string): Promise<void> {
+  if (!(await RNFS.exists(dir))) {
+    await RNFS.mkdir(dir);
   }
 }
 
-export async function isModelPresent(model: ModelInfo): Promise<boolean> {
-  const path = `${MODELS_DIR}/${model.filename}`;
-  if (!(await RNFS.exists(path))) return false;
+/**
+ * Returns true only if the file exists and is at least 99% of the expected
+ * size. The 1% tolerance accommodates minor version differences in hosted
+ * files without letting a zero-byte partial download pass.
+ */
+export async function isModelPresent(asset: ManifestAsset): Promise<boolean> {
+  const path = modelPath(asset);
+  if (!(await RNFS.exists(path))) {
+    return false;
+  }
   const stat = await RNFS.stat(path);
-  // A size mismatch indicates a corrupt/partial download
-  return stat.size >= model.sizeBytes * 0.99;
+  return Number(stat.size) >= asset.sizeBytes * 0.99;
 }
 
+// ─── Installed-version bookkeeping ─────────────────────────────────────────
+//
+// A small JSON file recording which manifest `version` string was installed
+// for each asset key. Compared against the live manifest to decide whether
+// a newer checkpoint is available — presence alone (isModelPresent) can't
+// tell "installed" apart from "installed but outdated".
+
+async function readInstalledVersions(): Promise<
+  Partial<Record<ManifestKey, string>>
+> {
+  try {
+    if (!(await RNFS.exists(INSTALLED_VERSIONS_PATH))) {
+      return {};
+    }
+    const raw = await RNFS.readFile(INSTALLED_VERSIONS_PATH, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function writeInstalledVersion(
+  key: ManifestKey,
+  version: string,
+): Promise<void> {
+  const versions = await readInstalledVersions();
+  versions[key] = version;
+  await RNFS.writeFile(
+    INSTALLED_VERSIONS_PATH,
+    JSON.stringify(versions),
+    'utf8',
+  );
+}
+
+/**
+ * Compares each manifest asset's version against what's recorded as
+ * installed. Only considers assets that are actually present — a missing
+ * asset belongs to first-time setup, not an update prompt. Doesn't download
+ * anything; callers decide whether to prompt or auto-fetch.
+ */
+export async function checkForUpdates(
+  manifest: ModelManifest,
+): Promise<ManifestKey[]> {
+  const keys: ManifestKey[] = ['whisper', 'translator', 'font'];
+  const installed = await readInstalledVersions();
+  const outdated: ManifestKey[] = [];
+
+  for (const key of keys) {
+    const asset = manifest[key];
+    if (!(await isModelPresent(asset))) {
+      continue;
+    }
+    if (installed[key] !== asset.version) {
+      outdated.push(key);
+    }
+  }
+  return outdated;
+}
+
+/**
+ * Downloads a manifest asset to its configured `dir` directory and records
+ * its version as installed. Resumes partial downloads automatically (RNFS
+ * range-request support).
+ */
 export async function downloadModel(
-  model: ModelInfo,
+  key: ManifestKey,
+  asset: ManifestAsset,
   onProgress: (bytesWritten: number, contentLength: number) => void,
 ): Promise<string> {
-  await ensureModelsDir();
-  const destPath = `${MODELS_DIR}/${model.filename}`;
+  await ensureDir(dirFor(asset));
+  const destPath = modelPath(asset);
 
-  const result = await RNFS.downloadFile({
-    fromUrl: model.url,
+  const {promise} = RNFS.downloadFile({
+    fromUrl: asset.url,
     toFile: destPath,
-    progress: res => {
-      onProgress(res.bytesWritten, res.contentLength);
-    },
+    progress: res => onProgress(res.bytesWritten, res.contentLength),
     progressInterval: 500,
-    // Resume partial downloads
     begin: () => {},
-  }).promise;
+  });
 
+  const result = await promise;
   if (result.statusCode !== 200) {
-    throw new Error(`Download failed with status ${result.statusCode}`);
+    throw new Error(
+      `Download failed (HTTP ${result.statusCode}): ${asset.url}`,
+    );
   }
-  return destPath;
-}
 
-export function modelPath(model: ModelInfo): string {
-  return `${MODELS_DIR}/${model.filename}`;
+  await writeInstalledVersion(key, asset.version);
+  return destPath;
 }

@@ -1,0 +1,33 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# React Native
+.expo/
+.expo-shared/
+*.orig.*
+
+# Android build outputs
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+*.apk
+*.aab
+
+# CI-fetched native sources — cloned by android-build.yml, never committed
+android/app/src/main/cpp/whisper_src/
+
+# Pre-built native libraries (if ever placed locally for dev)
+android/app/src/main/jniLibs/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# TypeScript
+*.tsbuildinfo

@@ -26,7 +26,9 @@ class WhisperModule(reactContext: ReactApplicationContext) :
         const val NAME = "WhisperModule"
 
         init {
-            System.loadLibrary("whisper")
+            // whisper.cpp is compiled from source and statically linked into
+            // libwhisper_jni.so (see CMakeLists.txt, BUILD_SHARED_LIBS=OFF) —
+            // there is no separate libwhisper.so to load.
             System.loadLibrary("whisper_jni")
         }
     }

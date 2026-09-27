@@ -11,7 +11,7 @@ import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.facebook.react.defaults.DefaultReactNativeHost
 import com.facebook.soloader.SoLoader
 import com.coresubsapp.whisper.WhisperPackage
-import com.coresubsapp.translation.NLLBTranslationPackage
+import com.coresubsapp.translation.TranslatorPackage
 
 class MainApplication : Application(), ReactApplication {
 
@@ -20,7 +20,7 @@ class MainApplication : Application(), ReactApplication {
             override fun getPackages(): List<ReactPackage> =
                 PackageList(this).packages.apply {
                     add(WhisperPackage())
-                    add(NLLBTranslationPackage())
+                    add(TranslatorPackage())
                 }
 
             override fun getJSMainModuleName(): String = "index"

@@ -1,14 +1,3 @@
-import {I18nManager, Platform} from 'react-native';
-
-/** Force RTL layout direction for the entire app (call at app startup). */
-export function enableRTL(): void {
-  if (!I18nManager.isRTL) {
-    I18nManager.forceRTL(true);
-    // On Android a restart is needed; the app will relaunch automatically
-    // via RCTReloadCommand if called during init.
-  }
-}
-
 /**
  * Returns true if the text contains any Hebrew characters.
  * Used to conditionally apply RTL text style.

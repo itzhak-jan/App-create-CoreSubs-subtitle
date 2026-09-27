@@ -1,113 +1,211 @@
 /**
- * ModelSetupScreen — shown on first launch when AI models aren't downloaded.
+ * ModelSetupScreen — first-launch onboarding screen, and the "update
+ * available" screen (via the `onlyKeys` prop restricting which assets are
+ * shown/downloaded).
  *
- * Downloads whisper.cpp and NLLB models to DocumentDirectory.
- * This screen is only shown once; subsequent launches go directly to FilePicker.
+ * Downloads runtime assets described by the manifest (src/services/
+ * ModelManifest.ts) to DocumentDirectory:
+ *   1. Whisper STT model                (~148 MB)
+ *   2. TranslateGemma-4B translation model (size TBD — see ModelManifest.ts)
+ *   3. Rubik-Regular.ttf Hebrew font for export (~140 KB)
+ *
+ * None of these are bundled in the APK. Downloading at runtime keeps the
+ * repository and CI artefacts lightweight, and lets a newer checkpoint be
+ * rolled out by editing models-manifest.json — no app update needed.
  */
-import React, {useState, useCallback} from 'react';
+import React, {useState, useCallback, useMemo} from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
-  Alert,
   ScrollView,
 } from 'react-native';
-import {
-  WHISPER_MODEL,
-  NLLB_MODEL,
-  downloadModel,
-  isModelPresent,
-  ModelInfo,
-} from '../../services/ModelSetupService';
+import type {
+  ManifestAsset,
+  ManifestKey,
+  ModelManifest,
+} from '../../services/ModelManifest';
+import {downloadModel, isModelPresent} from '../../services/ModelSetupService';
 
-type DownloadPhase = 'idle' | 'downloading_whisper' | 'downloading_nllb' | 'done' | 'error';
+type DownloadPhase = 'idle' | ManifestKey | 'done' | 'error';
 
-interface ModelProgress {
+const ALL_KEYS: ManifestKey[] = ['whisper', 'translator', 'font'];
+
+interface AssetProgress {
   bytes: number;
   total: number;
 }
 
 interface ModelSetupScreenProps {
+  manifest: ModelManifest;
   onComplete: () => void;
+  /** Restrict to a subset of assets — used by the "update available" flow
+   *  to re-download only the outdated ones. Defaults to all three. */
+  onlyKeys?: ManifestKey[];
 }
 
-function formatMB(bytes: number): string {
-  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
-}
+const ASSET_LABELS: Record<
+  ManifestKey,
+  {label: string; describe: (a: ManifestAsset) => string}
+> = {
+  whisper: {
+    label: 'Whisper STT',
+    describe: a =>
+      `Speech-to-text model  •  ${a.family}  •  ~${Math.round(
+        a.sizeBytes / 1_000_000,
+      )} MB`,
+  },
+  translator: {
+    label: 'AI Translation',
+    describe: a =>
+      `English → Hebrew  •  ${a.family}  •  ~${Math.round(
+        a.sizeBytes / 1_000_000,
+      )} MB`,
+  },
+  font: {
+    label: 'Hebrew Font',
+    describe: a =>
+      `${a.filename} for subtitle export  •  ~${Math.round(
+        a.sizeBytes / 1_000,
+      )} KB`,
+  },
+};
 
-function ProgressBar({progress}: {progress: number}): React.JSX.Element {
+function ProgressBar({ratio}: {ratio: number}): React.JSX.Element {
   return (
     <View style={styles.progressTrack}>
-      <View style={[styles.progressFill, {width: `${Math.min(100, progress * 100)}%`}]} />
+      <View
+        style={[styles.progressFill, {width: `${Math.min(100, ratio * 100)}%`}]}
+      />
     </View>
   );
 }
 
-export function ModelSetupScreen({onComplete}: ModelSetupScreenProps): React.JSX.Element {
+function AssetRow({
+  label,
+  description,
+  progress,
+  active,
+}: {
+  label: string;
+  description: string;
+  progress: AssetProgress;
+  active: boolean;
+}): React.JSX.Element {
+  const ratio = progress.total > 0 ? progress.bytes / progress.total : 0;
+  const done = ratio >= 0.999;
+
+  return (
+    <View style={styles.assetRow}>
+      <View style={styles.assetHeader}>
+        <Text style={styles.assetLabel}>{label}</Text>
+        {done && <Text style={styles.checkmark}>✓</Text>}
+        {active && !done && (
+          <Text style={styles.activeLabel}>Downloading…</Text>
+        )}
+      </View>
+      <Text style={styles.assetDesc}>{description}</Text>
+      <ProgressBar ratio={ratio} />
+    </View>
+  );
+}
+
+export function ModelSetupScreen({
+  manifest,
+  onComplete,
+  onlyKeys,
+}: ModelSetupScreenProps): React.JSX.Element {
+  const keys = useMemo(() => onlyKeys ?? ALL_KEYS, [onlyKeys]);
+  const isUpdate = !!onlyKeys;
+
   const [phase, setPhase] = useState<DownloadPhase>('idle');
-  const [whisperProg, setWhisperProg] = useState<ModelProgress>({bytes: 0, total: WHISPER_MODEL.sizeBytes});
-  const [nllbProg, setNllbProg] = useState<ModelProgress>({bytes: 0, total: NLLB_MODEL.sizeBytes});
   const [errorMsg, setErrorMsg] = useState('');
+  const [progress, setProgress] = useState<Record<ManifestKey, AssetProgress>>(
+    () => {
+      const initial = {} as Record<ManifestKey, AssetProgress>;
+      for (const key of keys) {
+        initial[key] = {bytes: 0, total: manifest[key].sizeBytes};
+      }
+      return initial;
+    },
+  );
+
+  const setAssetProgress = useCallback((key: ManifestKey, p: AssetProgress) => {
+    setProgress(prev => ({...prev, [key]: p}));
+  }, []);
+
+  const downloadAsset = useCallback(
+    async (key: ManifestKey) => {
+      const asset = manifest[key];
+      const present = await isModelPresent(asset);
+      if (present && !isUpdate) {
+        setAssetProgress(key, {bytes: asset.sizeBytes, total: asset.sizeBytes});
+        return;
+      }
+      setPhase(key);
+      await downloadModel(key, asset, (bytes, contentLength) =>
+        setAssetProgress(key, {
+          bytes,
+          total: contentLength > 0 ? contentLength : asset.sizeBytes,
+        }),
+      );
+      setAssetProgress(key, {bytes: asset.sizeBytes, total: asset.sizeBytes});
+    },
+    [manifest, isUpdate, setAssetProgress],
+  );
 
   const downloadAll = useCallback(async () => {
+    setErrorMsg('');
     try {
-      // Whisper
-      const whisperPresent = await isModelPresent(WHISPER_MODEL);
-      if (!whisperPresent) {
-        setPhase('downloading_whisper');
-        await downloadModel(WHISPER_MODEL, (b, t) =>
-          setWhisperProg({bytes: b, total: t > 0 ? t : WHISPER_MODEL.sizeBytes}),
-        );
-      } else {
-        setWhisperProg(p => ({...p, bytes: p.total}));
+      for (const key of keys) {
+        await downloadAsset(key);
       }
-
-      // NLLB
-      const nllbPresent = await isModelPresent(NLLB_MODEL);
-      if (!nllbPresent) {
-        setPhase('downloading_nllb');
-        await downloadModel(NLLB_MODEL, (b, t) =>
-          setNllbProg({bytes: b, total: t > 0 ? t : NLLB_MODEL.sizeBytes}),
-        );
-      } else {
-        setNllbProg(p => ({...p, bytes: p.total}));
-      }
-
       setPhase('done');
       onComplete();
     } catch (e) {
       setPhase('error');
       setErrorMsg(String(e));
     }
-  }, [onComplete]);
+  }, [keys, downloadAsset, onComplete]);
 
-  const isActive = phase !== 'idle' && phase !== 'done' && phase !== 'error';
+  const isActive = keys.includes(phase as ManifestKey);
+
+  const btnLabel =
+    phase === 'idle'
+      ? isUpdate
+        ? 'Update & Continue'
+        : 'Download & Continue'
+      : phase === 'error'
+      ? 'Retry'
+      : 'Downloading…';
+
+  const totalMB = Math.round(
+    keys.reduce((sum, key) => sum + manifest[key].sizeBytes, 0) / 1_000_000,
+  );
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.logo}>CoreSubs</Text>
-      <Text style={styles.title}>First-Time Setup</Text>
+      <Text style={styles.title}>
+        {isUpdate ? 'Model Update Available' : 'First-Time Setup'}
+      </Text>
       <Text style={styles.subtitle}>
-        CoreSubs uses on-device AI models — nothing leaves your phone.{'\n'}
-        Download them once (approx. 460 MB total).
+        All AI processing runs entirely on-device.{'\n'}
+        {isUpdate
+          ? 'A newer version of one or more models is available.'
+          : 'Download the models once — nothing leaves your phone.'}
       </Text>
 
-      {/* Whisper model */}
-      <ModelRow
-        label="Whisper STT"
-        description="Speech-to-text • ggml-base.en-q5 (~57 MB)"
-        progress={whisperProg.bytes / whisperProg.total}
-        active={phase === 'downloading_whisper'}
-      />
-
-      {/* NLLB model */}
-      <ModelRow
-        label="NLLB Translation"
-        description="English → Hebrew • INT8 quantized (~310 MB)"
-        progress={nllbProg.bytes / nllbProg.total}
-        active={phase === 'downloading_nllb'}
-      />
+      {keys.map(key => (
+        <AssetRow
+          key={key}
+          label={ASSET_LABELS[key].label}
+          description={ASSET_LABELS[key].describe(manifest[key])}
+          progress={progress[key]}
+          active={phase === key}
+        />
+      ))}
 
       {phase === 'error' && (
         <Text style={styles.errorText}>Error: {errorMsg}</Text>
@@ -118,41 +216,14 @@ export function ModelSetupScreen({onComplete}: ModelSetupScreenProps): React.JSX
         onPress={downloadAll}
         disabled={isActive}
         activeOpacity={0.85}>
-        <Text style={styles.btnText}>
-          {phase === 'idle' ? 'Download Models'
-            : phase === 'error' ? 'Retry'
-            : 'Downloading…'}
-        </Text>
+        <Text style={styles.btnText}>{btnLabel}</Text>
       </TouchableOpacity>
 
       <Text style={styles.hint}>
-        Requires a Wi-Fi connection. Models are stored locally and never uploaded.
+        Requires a network connection. All files are saved locally and never
+        uploaded. Total download: ~{totalMB} MB.
       </Text>
     </ScrollView>
-  );
-}
-
-function ModelRow({
-  label,
-  description,
-  progress,
-  active,
-}: {
-  label: string;
-  description: string;
-  progress: number;
-  active: boolean;
-}): React.JSX.Element {
-  return (
-    <View style={styles.modelRow}>
-      <View style={styles.modelHeader}>
-        <Text style={styles.modelLabel}>{label}</Text>
-        {progress >= 1 && <Text style={styles.checkmark}>✓</Text>}
-        {active && <Text style={styles.activeLabel}>Downloading…</Text>}
-      </View>
-      <Text style={styles.modelDesc}>{description}</Text>
-      <ProgressBar progress={progress} />
-    </View>
   );
 }
 
@@ -174,18 +245,18 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginBottom: 8,
   },
-  modelRow: {
+  assetRow: {
     width: '100%',
     backgroundColor: '#1A1A1A',
     borderRadius: 12,
     padding: 16,
     gap: 8,
   },
-  modelHeader: {flexDirection: 'row', alignItems: 'center', gap: 8},
-  modelLabel: {color: '#FFF', fontWeight: '600', fontSize: 15, flex: 1},
+  assetHeader: {flexDirection: 'row', alignItems: 'center', gap: 8},
+  assetLabel: {color: '#FFF', fontWeight: '600', fontSize: 15, flex: 1},
   checkmark: {color: '#4CAF50', fontSize: 16, fontWeight: '700'},
   activeLabel: {color: '#FFD700', fontSize: 12},
-  modelDesc: {color: '#888', fontSize: 12},
+  assetDesc: {color: '#888', fontSize: 12},
   progressTrack: {
     height: 4,
     backgroundColor: '#333',
