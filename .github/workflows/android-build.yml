@@ -26,6 +26,10 @@ jobs:
     name: Build Release APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # contents: write is needed by the "Publish APK to GitHub Release" step
+    # below, which creates/updates a Release via the default GITHUB_TOKEN.
+    permissions:
+      contents: write
 
     steps:
       # ── Source ──────────────────────────────────────────────────────────────
@@ -138,6 +142,9 @@ jobs:
       # ── Artefact upload ──────────────────────────────────────────────────────
       # The APK is signed with the throw-away debug keystore generated above.
       # Kept for 14 days so testers can download it from the Actions tab.
+      # (Zipped, and the Actions tab is web-only — the GitHub Release below is
+      # the phone-friendly download path; this artifact upload stays as a
+      # per-commit paper trail.)
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
@@ -145,6 +152,34 @@ jobs:
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 14
+
+      # ── GitHub Release (phone-friendly download) ────────────────────────────
+      # The Actions artifact above is a zip and the official GitHub mobile app
+      # has no UI to download Actions artifacts at all — that's web-only.
+      # Release assets, on the other hand, download straight to the phone from
+      # the app's own Releases tab (no zip to extract). One rolling release
+      # per branch (tag "latest-<branch, slashes to dashes>") is overwritten on
+      # every successful build, so a single bookmarked link always has the
+      # newest APK instead of piling up a new Release per commit.
+      - name: Compute release tag
+        id: release_tag
+        run: echo "tag=latest-$(echo '${{ github.ref_name }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Publish APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: "CoreSubs — latest (${{ github.ref_name }})"
+          body: |
+            Automatically rebuilt and republished on every push to `${{ github.ref_name }}`.
+            Commit: ${{ github.sha }}
+
+            This is a CI build signed with a throw-away debug keystore, not a
+            production release. Runtime correctness (translation quality, audio
+            extraction, subtitle burn-in) has not been verified on a real device.
+          files: android/app/build/outputs/apk/release/app-release.apk
+          prerelease: true
+          make_latest: false
 
       # ── Build summary ────────────────────────────────────────────────────────
       - name: Write build summary
