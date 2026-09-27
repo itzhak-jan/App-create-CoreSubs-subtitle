@@ -1,14 +1,18 @@
 name: Android Release Build
 
 # ── Triggers ──────────────────────────────────────────────────────────────────
-# Runs automatically on pushes to main.
+# Runs automatically on pushes to main or to this feature branch (added the
+# latter after a push to the feature branch produced no automatic run at
+# all — a manual "Re-run" on an old failed run then silently re-ran a stale
+# commit instead of the latest fixes, which is exactly the kind of trap
+# this is meant to avoid).
 # Can also be triggered manually from the Actions tab (workflow_dispatch).
 # No model or font files are downloaded here — they are runtime-only assets
 # fetched by the app on first launch. The build artefact is therefore small
 # and the workflow completes quickly.
 on:
   push:
-    branches: [main]
+    branches: [main, claude/rn-video-player-subtitles-1wvb3q]
   workflow_dispatch:
 
 # Cancel any in-progress run for the same branch to avoid queued builds
