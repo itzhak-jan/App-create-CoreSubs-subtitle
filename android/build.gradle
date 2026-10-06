@@ -12,6 +12,21 @@ buildscript {
         targetSdkVersion = 34
         ndkVersion = "26.1.10909125"
         kotlinVersion = "1.9.22"
+        // react-native-video's build.gradle defaults to Media3 1.3.1
+        // (node_modules/react-native-video/android/gradle.properties) unless
+        // this exact property is set on rootProject.ext — its own
+        // safeExtGet() checks here first. Left unset, Gradle's dependency
+        // resolution picks the higher of RN-video's 1.3.1 and the 1.9.1 our
+        // own Media3 modules declare (AudioChunkExtractorModule.kt,
+        // SubtitleExportModule.kt) for every Media3 artifact in the app —
+        // including the ones RN-video actually uses (media3-exoplayer).
+        // react-native-video's ExoPlayer wrapper is then *compiled* against
+        // 1.3.1's API but *runs* against 1.9.1's, and crashed on first video
+        // selection with a NoSuchMethodError on DefaultLoadControl's
+        // constructor (its signature changed between those versions) —
+        // confirmed via a real-device logcat. Setting this pins RN-video to
+        // compile against the same 1.9.1 the rest of the app uses.
+        media3Version = "1.9.1"
     }
     repositories {
         google()
