@@ -1,0 +1,34 @@
+diff --git a/node_modules/react-native-video/android/src/main/java/com/brentvatne/exoplayer/VideoPlaybackService.kt b/node_modules/react-native-video/android/src/main/java/com/brentvatne/exoplayer/VideoPlaybackService.kt
+index 6cf6f7d..87011ea 100644
+--- a/node_modules/react-native-video/android/src/main/java/com/brentvatne/exoplayer/VideoPlaybackService.kt
++++ b/node_modules/react-native-video/android/src/main/java/com/brentvatne/exoplayer/VideoPlaybackService.kt
+@@ -179,17 +179,25 @@ class VideoPlaybackService : MediaSessionService() {
+                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                 .setSmallIcon(androidx.media3.session.R.drawable.media3_icon_circular_play)
+                 // Add media control buttons that invoke intents in your media service
+-                .addAction(androidx.media3.session.R.drawable.media3_notification_seek_back, "Seek Backward", seekBackwardPendingIntent) // #0
++                //
++                // Patched (see patches/react-native-video+6.4.5.patch): the original
++                // androidx.media3.session.R.drawable.media3_notification_* icons this
++                // library shipped against don't exist in Media3 1.9.1 (this app pins
++                // media3Version=1.9.1 in android/build.gradle to match its own Media3
++                // modules — see that file for why). Using android.R.drawable's
++                // long-standing platform media icons instead: a stable, version-proof
++                // dependency, where media3-session's own ones turned out not to be.
++                .addAction(android.R.drawable.ic_media_rew, "Seek Backward", seekBackwardPendingIntent) // #0
+                 .addAction(
+                     if (session.player.isPlaying) {
+-                        androidx.media3.session.R.drawable.media3_notification_pause
++                        android.R.drawable.ic_media_pause
+                     } else {
+-                        androidx.media3.session.R.drawable.media3_notification_play
++                        android.R.drawable.ic_media_play
+                     },
+                     "Toggle Play",
+                     togglePlayPendingIntent
+                 ) // #1
+-                .addAction(androidx.media3.session.R.drawable.media3_notification_seek_forward, "Seek Forward", seekForwardPendingIntent) // #2
++                .addAction(android.R.drawable.ic_media_ff, "Seek Forward", seekForwardPendingIntent) // #2
+                 // Apply the media style template
+                 .setStyle(MediaStyleNotificationHelper.MediaStyle(session).setShowActionsInCompactView(0, 1, 2))
+                 .setContentTitle(session.player.mediaMetadata.title)
