@@ -1,5 +1,5 @@
 {
-  "_readme": "Fetched at runtime by src/services/ModelManifest.ts (raw content from the main branch). Bump an asset's 'version' whenever you change its 'url' — that's the only signal the app uses to detect an available update. NOTE on 'translator': Gemma3-1B-IT, chosen because it's explicitly documented as Android + MediaPipe LLM Inference ready (unlike TranslateGemma, which has no official mobile bundle). Filename/size cross-checked across independent sources but this environment's network policy blocks huggingface.co directly, so the URL itself hasn't had a live HTTP check, and it's unconfirmed whether the download requires an accepted Gemma license via a logged-in HuggingFace session. See ModelManifest.ts and TranslatorModule.kt for full detail.",
+  "_readme": "Fetched at runtime by src/services/ModelManifest.ts (raw content from the main branch). Bump an asset's 'version' whenever you change its 'url' — that's the only signal the app uses to detect an available update. NOTE on 'translator': Gemma3-1B-IT, chosen because it's explicitly documented as Android + MediaPipe LLM Inference ready (unlike TranslateGemma, which has no official mobile bundle). The original huggingface.co URL is gated behind an accepted Gemma license and 401s for anonymous downloads, so the file is now self-hosted as a binary asset on this repo's own 'models-v1' GitHub Release instead. See ModelManifest.ts and TranslatorModule.kt for full detail.",
   "whisper": {
     "family": "whisper-ggml",
     "version": "1.0.0",
@@ -10,10 +10,10 @@
   },
   "translator": {
     "family": "gemma3-1b",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "filename": "Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task",
-    "url": "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task",
-    "sizeBytes": 555000000,
+    "url": "https://github.com/itzhak-jan/App-create-CoreSubs-subtitle/releases/download/models-v1/Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task",
+    "sizeBytes": 520000000,
     "dir": "models"
   }
 }

@@ -34,20 +34,17 @@ import java.util.concurrent.atomic.AtomicBoolean
  * model (not translation-specialized, so output quality depends on the
  * prompt in TranslationService.ts rather than fine-tuning), whose README
  * explicitly confirms Android + MediaPipe LLM Inference support in the same
- * .task format this module already expects. See ModelManifest.ts header for
- * the full history and what's still unconfirmed (license gating).
+ * .task format this module already expects.
  *
- * UNVERIFIED — confirm before shipping (this session's sandbox couldn't
- * browse huggingface.co to check; see ModelManifest.ts header):
- *   - A live HTTP check of the Gemma3-1B-IT URL itself — cross-referenced
- *     across independent search results (filename, size, Android-ready
- *     confirmation), but never fetched directly.
- *   - Whether the download is gated behind a Gemma license acceptance /
- *     HuggingFace account. If so, an anonymous RNFS.downloadFile() won't
- *     work — either self-host a copy after accepting the license once
- *     yourself, or add an Authorization header (ManifestAsset would need
- *     an optional `headers` field; not implemented here since it's
- *     unneeded until the gating question is settled).
+ * CONFIRMED (real-device test): the huggingface.co URL 401s for anonymous
+ * downloads — litert-community/Gemma3-1B-IT is gated behind an accepted
+ * Gemma license via a logged-in HuggingFace account. Fixed by self-hosting:
+ * the .task file was downloaded once after accepting the license, then
+ * re-uploaded as a binary asset on this repo's own `models-v1` GitHub
+ * Release, which serves it over a plain unauthenticated URL — see
+ * ModelManifest.ts for the actual URL in use.
+ *
+ * Still open — not yet verified on-device:
  *   - There's no official translation-specific prompt/chat template to
  *     match here (Gemma3-1B-IT is general-purpose) — the prompts built in
  *     TranslationService.ts are a reasonable instruction-style guess, not

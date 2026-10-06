@@ -29,15 +29,18 @@
  *   model (not translation-specialized, so quality depends on the prompt
  *   in TranslationService.ts rather than fine-tuning) whose README
  *   explicitly confirms Android + MediaPipe LLM Inference support, in the
- *   same .task format already used here. Cross-checked filename and size
- *   across several independent sources; this sandbox's network policy still
- *   blocks huggingface.co directly, so the URL itself hasn't had a live
- *   HTTP check — if it 404s, that's the first thing to verify.
+ *   same .task format already used here.
  *
- *   Still open: whether the download requires accepting Gemma's license via
- *   a logged-in HuggingFace session (common for Gemma re-uploads) — an
- *   anonymous RNFS.downloadFile() would fail against a gated repo. Confirm
- *   by opening the URL below in a browser.
+ *   The HuggingFace URL confirmed exactly the risk flagged earlier: it 401s
+ *   for anonymous requests — litert-community/Gemma3-1B-IT is gated behind
+ *   accepting Gemma's license via a logged-in HuggingFace account, so
+ *   RNFS.downloadFile() can never succeed against it directly. Fixed by
+ *   self-hosting: after accepting the license once in a browser, the .task
+ *   file was re-uploaded as a binary asset on this repo's own
+ *   `models-v1` GitHub Release, which serves it over a plain unauthenticated
+ *   URL. `url` below points there instead of huggingface.co now. Re-run the
+ *   same accept-license-then-reupload dance on this repo's Releases page if
+ *   the model is ever swapped again.
  */
 export interface ManifestAsset {
   /** Model family, e.g. "whisper-ggml", "translategemma-4b". Purely
@@ -84,12 +87,15 @@ export const DEFAULT_MANIFEST: ModelManifest = {
   },
   translator: {
     family: 'gemma3-1b',
-    version: '2.0.0',
+    version: '2.1.0',
     filename: 'Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task',
-    url: 'https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task',
-    // ~555 MB per multiple independent sources — see file header for what's
-    // still unconfirmed (license gating).
-    sizeBytes: 555_000_000,
+    // Self-hosted — see file header for why: the original huggingface.co
+    // URL is gated behind an accepted Gemma license and 401s for anonymous
+    // downloads.
+    url: 'https://github.com/itzhak-jan/App-create-CoreSubs-subtitle/releases/download/models-v1/Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task',
+    // 529 MB as reported by GitHub Releases for the actual uploaded file;
+    // kept a little under that as a floor for the corrupt/partial-download check.
+    sizeBytes: 520_000_000,
     dir: 'models',
   },
 };
