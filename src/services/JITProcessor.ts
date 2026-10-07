@@ -251,6 +251,11 @@ class JITProcessor {
       // Clean up the temp WAV to free storage
       deleteChunk(index);
     } catch (err) {
+      // Logged here because it's the only place a chunk failure is
+      // observable from outside the store — upsertChunk alone wouldn't
+      // show up in adb logcat, leaving "no subtitles, no visible error"
+      // as the only symptom.
+      console.error(`[JITProcessor] chunk ${index} failed:`, err);
       if (gen === this.generation) {
         upsertChunk({...chunk, status: 'error', error: String(err)});
       }
