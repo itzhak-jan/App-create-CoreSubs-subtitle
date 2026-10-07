@@ -113,7 +113,23 @@ jobs:
       # We generate a throw-away keystore here — sufficient for CI artefacts.
       # For a production-distributed APK, replace this with GitHub Secrets
       # and a dedicated release keystore.
+      #
+      # Cached with a fixed key (not tied to any changing file) so every run
+      # reuses the SAME keystore once one exists, instead of a fresh random
+      # one every time. Android refuses to install an "update" over an
+      # existing install signed with a different key
+      # (INSTALL_FAILED_UPDATE_INCOMPATIBLE) — without this cache, every
+      # single CI build would need `adb uninstall` before `adb install`
+      # could reinstall it, instead of plain `adb install -r`.
+      - name: Restore cached debug keystore
+        id: cache-keystore
+        uses: actions/cache@v4
+        with:
+          path: android/app/debug.keystore
+          key: debug-keystore-v1
+
       - name: Generate debug keystore for signing
+        if: steps.cache-keystore.outputs.cache-hit != 'true'
         run: |
           keytool -genkeypair -v \
             -keystore android/app/debug.keystore \
