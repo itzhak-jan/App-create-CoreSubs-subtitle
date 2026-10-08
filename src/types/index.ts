@@ -99,8 +99,16 @@ export interface ExportState {
 // ─── Processing Pipeline ─────────────────────────────────────────────────────
 
 export interface PipelineConfig {
-  /** Duration of each audio chunk in seconds */
+  /** Duration of each audio chunk in seconds (chunk 0 excluded — see firstChunkDurationSec) */
   chunkDuration: number;
+  /**
+   * Duration of chunk 0 specifically, in seconds. Short on purpose: the
+   * first subtitle shouldn't need a full chunkDuration's worth of
+   * extract+transcribe+translate before it can appear, since the video
+   * itself already starts playing as soon as it's loaded (see
+   * VideoPlayer.tsx's onLoad). Chunk 1 onward reverts to chunkDuration.
+   */
+  firstChunkDurationSec: number;
   /** How many seconds ahead of playhead to maintain in the buffer */
   bufferAheadSec: number;
   /** Trigger re-fetch when buffer remaining drops below this (seconds) */
@@ -109,6 +117,7 @@ export interface PipelineConfig {
 
 export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
   chunkDuration: 60,
+  firstChunkDurationSec: 8,
   bufferAheadSec: 120,
   refetchThresholdSec: 30,
 };

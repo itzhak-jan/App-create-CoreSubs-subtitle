@@ -10,6 +10,8 @@ import {
 } from 'react-native';
 import {useVideoStore} from '../../store/videoStore';
 import {useSubtitleStore} from '../../store/subtitleStore';
+import {chunkIndexForTime} from '../../services/TimestampCalculator';
+import {DEFAULT_PIPELINE_CONFIG} from '../../types';
 
 const PLAYBACK_RATES = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0];
 const {width: SCREEN_W} = Dimensions.get('window');
@@ -42,8 +44,14 @@ export function PlayerControls({
   const isSeeking = useRef(false);
   const seekTime = useRef(0);
 
-  // Determine pipeline status for the current position
-  const currentChunkIdx = Math.floor(currentTime / 60);
+  // Determine pipeline status for the current position. Chunk boundaries
+  // aren't a uniform grid (chunk 0 is shorter — see DEFAULT_PIPELINE_CONFIG
+  // in types/index.ts), so this must go through the same helper
+  // JITProcessor uses rather than assume every chunk is chunkDuration long.
+  const currentChunkIdx = chunkIndexForTime(
+    currentTime,
+    DEFAULT_PIPELINE_CONFIG,
+  );
   const currentChunk = chunks.get(currentChunkIdx);
   const statusLabel = currentChunk?.status
     ? STATUS_LABELS[currentChunk.status]

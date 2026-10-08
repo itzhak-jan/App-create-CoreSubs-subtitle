@@ -23,6 +23,7 @@ import {
   mapSegmentsToCues,
   chunkIndexForTime,
   chunkStartTime,
+  chunkDurationForIndex,
 } from './TimestampCalculator';
 import {useSubtitleStore} from '../store/subtitleStore';
 import {useVideoStore} from '../store/videoStore';
@@ -75,14 +76,8 @@ class JITProcessor {
     const remaining = bufferEnd - currentTimeSec;
 
     if (remaining <= this.config.refetchThresholdSec) {
-      const nextChunkIdx = chunkIndexForTime(
-        bufferEnd,
-        this.config.chunkDuration,
-      );
-      const nextChunkStart = chunkStartTime(
-        nextChunkIdx,
-        this.config.chunkDuration,
-      );
+      const nextChunkIdx = chunkIndexForTime(bufferEnd, this.config);
+      const nextChunkStart = chunkStartTime(nextChunkIdx, this.config);
       if (nextChunkStart < this.videoDuration) {
         this.processChunk(nextChunkIdx, nextChunkStart, this.generation);
       }
@@ -112,14 +107,8 @@ class JITProcessor {
     this.state = 'idle';
 
     // Immediately start processing from the new position
-    const targetChunkIdx = chunkIndexForTime(
-      newTimeSec,
-      this.config.chunkDuration,
-    );
-    const targetStart = chunkStartTime(
-      targetChunkIdx,
-      this.config.chunkDuration,
-    );
+    const targetChunkIdx = chunkIndexForTime(newTimeSec, this.config);
+    const targetStart = chunkStartTime(targetChunkIdx, this.config);
     this.processChunk(targetChunkIdx, targetStart, myGen);
   }
 
@@ -167,7 +156,7 @@ class JITProcessor {
     this.activeChunkIndex = index;
 
     const endSec = Math.min(
-      startSec + this.config.chunkDuration,
+      startSec + chunkDurationForIndex(index, this.config),
       this.videoDuration,
     );
     const actualDuration = endSec - startSec;
@@ -271,7 +260,7 @@ class JITProcessor {
     // ── Step 5: Schedule next chunk if still needed ───────────────────────
     if (gen === this.generation) {
       const nextIdx = index + 1;
-      const nextStart = chunkStartTime(nextIdx, this.config.chunkDuration);
+      const nextStart = chunkStartTime(nextIdx, this.config);
       if (nextStart < this.videoDuration) {
         const bufferEnd = this.getBufferEndTime();
         const playhead = readCurrentPlayheadTime();
