@@ -4,6 +4,12 @@ import {useGlossaryStore} from '../store/glossaryStore';
 
 const {TranslatorModule} = NativeModules;
 
+// Conservative character cap for a single segment's text, well under the
+// translator's 512-token budget (TranslatorModule.kt's MAX_TOKENS) even
+// after accounting for the instruction wrapper and glossary references —
+// see the crash-prevention comment in translateSegments() below.
+const MAX_SEGMENT_CHARS = 500;
+
 if (!TranslatorModule) {
   console.warn(
     '[TranslationService] TranslatorModule not found — native build required.',
@@ -70,9 +76,26 @@ export async function translateSegments(
   const pending: Array<{index: number; prompt: string}> = [];
 
   segments.forEach((seg, i) => {
-    const text = seg.text.trim();
+    let text = seg.text.trim();
     if (!text) {
       return;
+    }
+
+    // MediaPipe's native LLM engine doesn't fail gracefully when a prompt's
+    // token count exceeds its configured maxTokens (512, see
+    // TranslatorModule.kt) — confirmed on a real device as a native SIGSEGV
+    // crashing the whole app, not a catchable JS/Kotlin exception. Whisper
+    // can emit a pathologically long "segment" for a whole chunk (e.g.
+    // runaway/repeating output when fed audio in a language its model
+    // doesn't support — this app's whisper.cpp model is English-only, see
+    // ModelManifest.ts) instead of several short ones, so cap segment
+    // length defensively here rather than trust whatever Whisper returns.
+    if (text.length > MAX_SEGMENT_CHARS) {
+      console.warn(
+        `[TranslationService] Segment ${i} is abnormally long ` +
+          `(${text.length} chars) — truncating to avoid a native crash.`,
+      );
+      text = text.slice(0, MAX_SEGMENT_CHARS);
     }
 
     const relevant = findRelevant(text);

@@ -14,6 +14,12 @@ import {useSubtitleStore} from '../../store/subtitleStore';
 const PLAYBACK_RATES = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0];
 const {width: SCREEN_W} = Dimensions.get('window');
 
+const STATUS_LABELS: Record<string, string> = {
+  extracting: 'Extracting audio…',
+  transcribing: 'Transcribing…',
+  translating: 'Translating…',
+};
+
 function formatTime(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
@@ -39,10 +45,9 @@ export function PlayerControls({
   // Determine pipeline status for the current position
   const currentChunkIdx = Math.floor(currentTime / 60);
   const currentChunk = chunks.get(currentChunkIdx);
-  const isProcessing =
-    currentChunk?.status === 'extracting' ||
-    currentChunk?.status === 'transcribing' ||
-    currentChunk?.status === 'translating';
+  const statusLabel = currentChunk?.status
+    ? STATUS_LABELS[currentChunk.status]
+    : undefined;
 
   const panResponder = useRef(
     PanResponder.create({
@@ -76,6 +81,15 @@ export function PlayerControls({
 
   return (
     <View style={styles.container}>
+      {/* Processing status — a labeled pill above the controls, not just a
+          small spinner easy to miss among the buttons below. */}
+      {statusLabel && (
+        <View style={styles.statusPill}>
+          <ActivityIndicator color="#FFD700" size="small" />
+          <Text style={styles.statusText}>{statusLabel}</Text>
+        </View>
+      )}
+
       {/* Seek bar */}
       <View style={styles.seekBarTrack} {...panResponder.panHandlers}>
         <View style={[styles.seekBarFill, {width: `${progress * 100}%`}]} />
@@ -108,15 +122,6 @@ export function PlayerControls({
             CC
           </Text>
         </TouchableOpacity>
-
-        {/* Processing indicator */}
-        {isProcessing && (
-          <ActivityIndicator
-            color="#FFD700"
-            size="small"
-            style={styles.spinner}
-          />
-        )}
       </View>
     </View>
   );
@@ -169,5 +174,16 @@ const styles = StyleSheet.create({
   },
   btnText: {color: '#FFF', fontSize: 15, fontWeight: '600'},
   disabled: {opacity: 0.35},
-  spinner: {marginLeft: 8},
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255,215,0,0.16)',
+    borderRadius: 12,
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+  },
+  statusText: {color: '#FFD700', fontSize: 12, fontWeight: '600'},
 });
