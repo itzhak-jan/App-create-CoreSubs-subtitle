@@ -142,8 +142,18 @@ class AudioChunkExtractorModule(reactContext: ReactApplicationContext) :
             )
             val mixedFormat = channelMixer.configure(sourceFormat)
             sonic.configure(mixedFormat)
-            channelMixer.flush()
-            sonic.flush()
+            // The no-arg flush() is deprecated and, per Media3's own
+            // AudioProcessor interface, its default implementation
+            // unconditionally throws unless a class overrides it — confirmed
+            // via real-device crash: "AudioProcessor must implement at least
+            // one #flush() overload." ChannelMixingAudioProcessor (extends
+            // BaseAudioProcessor, which overrides both) would have been fine,
+            // but SonicAudioProcessor implements AudioProcessor directly and
+            // only overrides flush(StreamMetadata) — so the no-arg call hit
+            // the interface's throwing default. Using the StreamMetadata
+            // overload for both, since it's the actually-implemented one.
+            channelMixer.flush(AudioProcessor.StreamMetadata.DEFAULT)
+            sonic.flush(AudioProcessor.StreamMetadata.DEFAULT)
 
             val pcmChunks = mutableListOf<ByteArray>()
             var totalPcmBytes = 0
