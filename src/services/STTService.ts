@@ -25,9 +25,15 @@ export async function initWhisper(modelPath: string): Promise<void> {
 
 /**
  * Transcribe a 16 kHz mono WAV file. Returns segments with chunk-relative
- * timestamps (t0/t1 in seconds).
+ * timestamps (t0/t1 in seconds) and the language used/detected.
+ *
+ * language: ISO 639-1 code or 'auto'. English-only ('.en') models ignore
+ * it and always report 'en'.
  */
-export async function transcribeAudio(wavPath: string): Promise<WhisperResult> {
+export async function transcribeAudio(
+  wavPath: string,
+  language = 'auto',
+): Promise<WhisperResult> {
   if (!WhisperModule) {
     // Dev-mode stub — returns an empty result so the pipeline stays alive
     return {segments: [], language: 'en'};
@@ -36,7 +42,7 @@ export async function transcribeAudio(wavPath: string): Promise<WhisperResult> {
   const raw: {
     segments: Array<{t0: number; t1: number; text: string}>;
     language: string;
-  } = await WhisperModule.transcribe(wavPath);
+  } = await WhisperModule.transcribe(wavPath, language);
 
   return {
     segments: raw.segments.map(s => ({

@@ -1,14 +1,28 @@
 /**
- * JITProcessor — master orchestrator for the Just-In-Time subtitle pipeline.
+ * JITProcessor — orchestrates the Just-In-Time subtitle pipeline as two
+ * independent stages that run at the same time:
  *
- * Responsibilities:
- *  - Maintains a processing queue of AudioChunks
- *  - Advances the buffer ahead of the playhead
- *  - Handles seek flushes
- *  - Throttles concurrent work to avoid thermal pressure
+ *   STT stage          extract audio → whisper (CPU)      → translation queue
+ *   Translation stage  lock new names → translate (ML Kit / GPU) → cues ready
+ *
+ * Previously one chunk went through every step before the next chunk
+ * started, so whisper sat idle during translation (and vice versa), and a
+ * 60 s chunk that took more than 60 s to process meant a guaranteed stall.
+ * Now whisper keeps transcribing ahead while translation catches up.
+ *
+ * Other latency details:
+ *  - The first chunk after load/seek is short (firstChunkDuration), so
+ *    subtitles appear within seconds; later chunks are chunkDuration.
+ *  - Chunk boundaries follow speech: if whisper's last segment runs into
+ *    the end of the chunk (a sentence cut in half), it's dropped and the
+ *    next chunk starts at that segment instead.
+ *  - Finished chunks are kept across seeks, so jumping back doesn't redo
+ *    work; the STT cursor just skips over audio that's already covered.
+ *  - Every stage logs its duration under the "[CoreSubs][timing]" tag
+ *    (adb logcat | grep CoreSubs) so the slow stage is visible on-device.
  */
 
-import type {AudioChunk, PipelineConfig} from '../types';
+import type {AudioChunk, PipelineConfig, WhisperSegment} from '../types';
 import {DEFAULT_PIPELINE_CONFIG} from '../types';
 import {
   extractChunk,
@@ -16,100 +30,162 @@ import {
   abortChunkExtraction,
 } from './ChunkExtractor';
 import {transcribeAudio, abortTranscription} from './STTService';
-import {translateSegments, abortTranslation} from './TranslationService';
-import {extractGlossaryEntries} from './GlossaryExtractor';
-import {useGlossaryStore} from '../store/glossaryStore';
 import {
-  mapSegmentsToCues,
-  chunkIndexForTime,
-  chunkStartTime,
-  chunkDurationForIndex,
-} from './TimestampCalculator';
+  translateSegments,
+  abortTranslation,
+  prepareTranslation,
+  isLlmReady,
+} from './TranslationService';
+import {extractGlossaryEntries} from './GlossaryExtractor';
+import {
+  observeSegments,
+  lockPendingTerms,
+  resetGlossaryDetection,
+} from './GlossaryService';
+import {useGlossaryStore} from '../store/glossaryStore';
+import {getSettings} from '../store/settingsStore';
+import {mapSegmentsToCues} from './TimestampCalculator';
 import {useSubtitleStore} from '../store/subtitleStore';
 import {useVideoStore} from '../store/videoStore';
 
-type ProcessorState = 'idle' | 'running';
+/** Seconds — a last segment ending this close to the chunk end is treated
+ *  as cut off mid-sentence. */
+const CUT_TOLERANCE_SEC = 1.0;
+/** Never shrink a chunk below this when re-aligning to speech. */
+const MIN_CHUNK_SEC = 3;
+/** With the LLM engine, run glossary extraction every N translated chunks. */
+const LLM_GLOSSARY_EVERY = 3;
+
+const log = (msg: string) => console.log(`[CoreSubs][timing] ${msg}`);
 
 class JITProcessor {
   private config: PipelineConfig = DEFAULT_PIPELINE_CONFIG;
   private videoUri = '';
   private videoDuration = 0;
-  private state: ProcessorState = 'idle';
-  private activeChunkIndex = -1;
 
   /**
-   * Bumped on every init/seek/reset. Each processChunk() call captures the
-   * generation it was started with and re-checks it after every await point.
-   *
-   * A boolean "flushSignal" used to serve this purpose, but it was reset
-   * synchronously in seek() without waiting for the stale in-flight
-   * processChunk() to actually observe it. Native abort (whisper.cpp /
-   * TFLite) is only cooperative — whisper_full() and the interpreter run
-   * loop are blocking calls that don't check the abort flag mid-inference —
-   * so a stale call could resume seconds later, after the flag had already
-   * been reset for the new position, and resurrect a chunk that seek() had
-   * just removed, or clobber `this.state` out from under the new chunk.
-   * A monotonically increasing generation counter can't be "un-bumped" by
-   * a stale call, so this can't happen.
+   * Bumped on every init/seek/reset. Each stage call captures the
+   * generation it started with and re-checks it after every await point,
+   * so a stale call (native abort is cooperative) can never write to the
+   * store or steal the busy flags of the new position.
    */
   private generation = 0;
 
-  init(uri: string, duration: number, config?: Partial<PipelineConfig>): void {
+  private sttBusy = false;
+  private trBusy = false;
+  /** Media time where the STT stage will cut its next chunk. */
+  private sttCursor = 0;
+  private nextIsFirst = true;
+  private nextIndex = 0;
+  /** Chunk indices that are transcribed and waiting for translation. */
+  private translateQueue = new Set<number>();
+  private translatedSinceGlossary = 0;
+  private lastLanguage = 'en';
+  private videoName = '';
+  private glossaryLoading: Promise<void> = Promise.resolve();
+  private recentPairs: Array<{original: string; hebrew: string}> = [];
+  private recentLang = 'en';
+
+  /**
+   * videoName keys the persisted glossary (together with the target
+   * language — renderings are per language).
+   */
+  init(
+    uri: string,
+    duration: number,
+    videoName = '',
+    config?: Partial<PipelineConfig>,
+  ): void {
     this.generation++;
     this.videoUri = uri;
+    this.videoName = videoName;
     this.videoDuration = duration;
     this.config = {...DEFAULT_PIPELINE_CONFIG, ...config};
-    this.state = 'idle';
-    this.activeChunkIndex = -1;
+    this.sttBusy = false;
+    this.trBusy = false;
+    this.sttCursor = 0;
+    this.nextIsFirst = true;
+    this.nextIndex = 0;
+    this.translateQueue.clear();
+    this.translatedSinceGlossary = 0;
+    this.recentPairs = [];
+    resetGlossaryDetection();
+
+    const {sourceLang, targetLang} = getSettings();
+    this.glossaryLoading = videoName
+      ? useGlossaryStore.getState().loadForVideo(`${videoName}.${targetLang}`)
+      : Promise.resolve();
+    this.lastLanguage = sourceLang === 'auto' ? 'en' : sourceLang;
+    // Fetch the ML Kit language pack now rather than on the first chunk.
+    prepareTranslation(sourceLang, targetLang);
+  }
+
+  /** Called ~4×/s from SubtitleManager; cheap when there's nothing to do. */
+  onPlayheadUpdate(_currentTimeSec: number): void {
+    this.pumpStt();
+    this.pumpTranslate();
   }
 
   /**
-   * Called by SubtitleManager whenever currentTime changes.
-   * Decides whether to kick off the next chunk fetch.
-   */
-  onPlayheadUpdate(currentTimeSec: number): void {
-    if (this.state !== 'idle') {
-      return;
-    }
-
-    const bufferEnd = this.getBufferEndTime();
-    const remaining = bufferEnd - currentTimeSec;
-
-    if (remaining <= this.config.refetchThresholdSec) {
-      const nextChunkIdx = chunkIndexForTime(bufferEnd, this.config);
-      const nextChunkStart = chunkStartTime(nextChunkIdx, this.config);
-      if (nextChunkStart < this.videoDuration) {
-        this.processChunk(nextChunkIdx, nextChunkStart, this.generation);
-      }
-    }
-  }
-
-  /**
-   * User jumped to a new position. Flush the current pipeline state and
-   * restart from the seek position.
+   * User jumped to a new position. Abort in-flight work, keep everything
+   * already finished, and restart both stages from the new position.
    */
   async seek(newTimeSec: number): Promise<void> {
-    const myGen = ++this.generation; // invalidates any in-flight processChunk call
+    this.generation++;
 
-    // Cancel any in-flight extraction/AI calls. These are best-effort: a
-    // stale call may still resume after this, but the generation bump above
-    // means it can no longer touch the store or `this.state` once it does.
+    // Best-effort cancels; the generation bump is what actually makes
+    // stale calls harmless.
     abortChunkExtraction();
     abortTranscription();
     abortTranslation();
 
-    // Drop all chunks ahead of seek point from the store
-    useSubtitleStore.getState().removeChunksAfter(newTimeSec);
+    const store = useSubtitleStore.getState();
+    this.translateQueue.clear();
+    for (const chunk of Array.from(store.chunks.values())) {
+      if (chunk.status === 'ready') {
+        continue;
+      }
+      if (
+        (chunk.status === 'awaiting_translation' ||
+          chunk.status === 'translating') &&
+        chunk.segments
+      ) {
+        // Transcription survived — only the translation needs redoing.
+        store.upsertChunk({...chunk, status: 'awaiting_translation'});
+        this.translateQueue.add(chunk.index);
+      } else {
+        // Interrupted mid-extraction/transcription, or errored: redo.
+        store.removeChunk(chunk.index);
+        deleteChunk(chunk.index);
+      }
+    }
+    store.setActiveCue(null);
 
-    // Force state back to idle so the new chunk below isn't blocked by a
-    // stale call that still believes it owns 'running' — its own finally
-    // block will no-op once it notices the generation has moved on.
-    this.state = 'idle';
+    this.sttBusy = false;
+    this.trBusy = false;
+    this.sttCursor = Math.max(0, newTimeSec);
+    this.nextIsFirst = true;
 
-    // Immediately start processing from the new position
-    const targetChunkIdx = chunkIndexForTime(newTimeSec, this.config);
-    const targetStart = chunkStartTime(targetChunkIdx, this.config);
-    this.processChunk(targetChunkIdx, targetStart, myGen);
+    this.pumpStt();
+    this.pumpTranslate();
+  }
+
+  /**
+   * Settings changed (engine / languages): drop all subtitles and start
+   * again from the current position with the new settings.
+   */
+  restart(): void {
+    if (!this.videoUri) {
+      return;
+    }
+    abortChunkExtraction();
+    abortTranscription();
+    abortTranslation();
+    const playhead = useVideoStore.getState().currentTime;
+    useSubtitleStore.getState().reset();
+    this.init(this.videoUri, this.videoDuration, this.videoName, this.config);
+    this.sttCursor = playhead;
+    this.pumpStt();
   }
 
   reset(): void {
@@ -117,164 +193,304 @@ class JITProcessor {
     abortChunkExtraction();
     abortTranscription();
     abortTranslation();
-    this.state = 'idle';
+    this.sttBusy = false;
+    this.trBusy = false;
+    this.translateQueue.clear();
     this.videoUri = '';
     this.videoDuration = 0;
     useSubtitleStore.getState().reset();
-    // Glossary entries are facts about THIS video's content — clear on a
-    // genuinely new video, but not on seek() (a jump within the same video).
+    // Glossary entries are facts about THIS video — forget them on a new
+    // video (they're persisted per video and reloaded next time), but not
+    // on seek().
     useGlossaryStore.getState().reset();
+    resetGlossaryDetection();
   }
 
-  private getBufferEndTime(): number {
-    const {chunks} = useSubtitleStore.getState();
-    let maxEnd = 0;
-    for (const chunk of chunks.values()) {
-      if (chunk.status === 'ready' && chunk.endSec > maxEnd) {
-        maxEnd = chunk.endSec;
-      }
-    }
-    return maxEnd;
-  }
+  // ─── Coverage helpers ─────────────────────────────────────────────────────
 
-  private async processChunk(
-    index: number,
-    startSec: number,
-    gen: number,
-  ): Promise<void> {
-    if (gen !== this.generation) {
-      return;
-    } // superseded before we even started
-    if (this.state === 'running') {
-      return;
-    } // already busy with a chunk
-    if (useSubtitleStore.getState().chunks.has(index)) {
-      return;
-    } // already done
-
-    this.state = 'running';
-    this.activeChunkIndex = index;
-
-    const endSec = Math.min(
-      startSec + chunkDurationForIndex(index, this.config),
-      this.videoDuration,
-    );
-    const actualDuration = endSec - startSec;
-
-    const chunk: AudioChunk = {
-      index,
-      startSec,
-      endSec,
-      status: 'extracting',
-      cues: [],
-    };
-
-    const {upsertChunk} = useSubtitleStore.getState();
-    upsertChunk({...chunk});
-
-    try {
-      // ── Step 1: Audio extraction ──────────────────────────────────────────
-      if (gen !== this.generation) {
-        return;
-      }
-      const wavPath = await extractChunk(
-        this.videoUri,
-        startSec,
-        actualDuration,
-        index,
-      );
-      if (gen !== this.generation) {
-        return;
-      }
-      upsertChunk({...chunk, status: 'transcribing', wavPath});
-
-      // ── Step 2: STT via whisper.cpp ───────────────────────────────────────
-      if (gen !== this.generation) {
-        return;
-      }
-      const whisperResult = await transcribeAudio(wavPath);
-      if (gen !== this.generation) {
-        return;
-      }
-      upsertChunk({...chunk, status: 'translating', wavPath});
-
-      // ── Step 3: Translation (Gemma3-1B-IT) ─────────────────────────────────
-      if (gen !== this.generation) {
-        return;
-      }
-      const hebrewTexts = await translateSegments(whisperResult.segments);
-
-      // Fire-and-forget: learn names/places/fixed phrases from this chunk
-      // for future consistency. Never awaited — must not add latency to the
-      // real-time pipeline — and deliberately not gated by `gen`: glossary
-      // entries are facts about the video's content, not the playhead
-      // position, so even a chunk superseded by a seek is still worth
-      // learning from.
-      extractGlossaryEntries(
-        whisperResult.segments.map((seg, i) => ({
-          original: seg.text.trim(),
-          hebrew: hebrewTexts[i] ?? '',
-        })),
-      )
-        .then(entries => {
-          if (entries.length > 0) {
-            useGlossaryStore.getState().upsertEntries(entries);
-          }
-        })
-        .catch(() => {}); // extractGlossaryEntries already catches internally; belt & suspenders
-
-      if (gen !== this.generation) {
-        return;
-      }
-
-      // ── Step 4: Timestamp mapping & store ────────────────────────────────
-      const cues = mapSegmentsToCues(
-        whisperResult.segments,
-        index,
-        startSec,
-        hebrewTexts,
-      );
-
-      upsertChunk({...chunk, status: 'ready', wavPath, cues});
-
-      // Clean up the temp WAV to free storage
-      deleteChunk(index);
-    } catch (err) {
-      // Logged here because it's the only place a chunk failure is
-      // observable from outside the store — upsertChunk alone wouldn't
-      // show up in adb logcat, leaving "no subtitles, no visible error"
-      // as the only symptom.
-      console.error(`[JITProcessor] chunk ${index} failed:`, err);
-      if (gen === this.generation) {
-        upsertChunk({...chunk, status: 'error', error: String(err)});
-      }
-    } finally {
-      // Only release the lock if we still own it — a stale call whose
-      // generation has been superseded must not clobber the new owner's
-      // 'running' state.
-      if (gen === this.generation) {
-        this.state = 'idle';
-      }
-    }
-
-    // ── Step 5: Schedule next chunk if still needed ───────────────────────
-    if (gen === this.generation) {
-      const nextIdx = index + 1;
-      const nextStart = chunkStartTime(nextIdx, this.config);
-      if (nextStart < this.videoDuration) {
-        const bufferEnd = this.getBufferEndTime();
-        const playhead = readCurrentPlayheadTime();
-        if (bufferEnd - playhead < this.config.bufferAheadSec) {
-          this.processChunk(nextIdx, nextStart, gen);
+  /** Moves `t` past any existing chunk(s) covering it. */
+  private skipCovered(t: number): number {
+    const chunks = Array.from(useSubtitleStore.getState().chunks.values());
+    let cursor = t;
+    let moved = true;
+    while (moved) {
+      moved = false;
+      for (const c of chunks) {
+        if (cursor >= c.startSec - 0.05 && cursor < c.endSec - 0.05) {
+          cursor = c.endSec;
+          moved = true;
         }
       }
     }
+    return cursor;
   }
-}
 
-// Reads the store directly (no hook) — this runs outside any React component.
-function readCurrentPlayheadTime(): number {
-  return useVideoStore.getState().currentTime;
+  /** Start of the first existing chunk after `t` (so new chunks don't overlap it). */
+  private nextChunkStartAfter(t: number): number {
+    let next = Infinity;
+    for (const c of useSubtitleStore.getState().chunks.values()) {
+      if (c.startSec > t + 0.05 && c.startSec < next) {
+        next = c.startSec;
+      }
+    }
+    return next;
+  }
+
+  // ─── Stage 1: STT ─────────────────────────────────────────────────────────
+
+  private async pumpStt(): Promise<void> {
+    if (this.sttBusy || !this.videoUri) {
+      return;
+    }
+    const gen = this.generation;
+    const playhead = useVideoStore.getState().currentTime;
+
+    const start = this.skipCovered(this.sttCursor);
+    this.sttCursor = start;
+    if (start >= this.videoDuration - 0.1) {
+      return;
+    }
+    if (start - playhead > this.config.bufferAheadSec) {
+      return; // far enough ahead
+    }
+
+    const len = this.nextIsFirst
+      ? this.config.firstChunkDurationSec
+      : this.config.chunkDuration;
+    let end = Math.min(
+      start + len,
+      this.videoDuration,
+      this.nextChunkStartAfter(start),
+    );
+    if (end - start < 0.2) {
+      this.sttCursor = end;
+      return;
+    }
+
+    this.sttBusy = true;
+    this.nextIsFirst = false;
+    const index = this.nextIndex++;
+    const store = useSubtitleStore.getState();
+    const chunk: AudioChunk = {
+      index,
+      startSec: start,
+      endSec: end,
+      status: 'extracting',
+      cues: [],
+    };
+    store.upsertChunk(chunk);
+
+    try {
+      const t0 = Date.now();
+      const wavPath = await extractChunk(
+        this.videoUri,
+        start,
+        end - start,
+        index,
+      );
+      const t1 = Date.now();
+      if (gen !== this.generation) {
+        deleteChunk(index);
+        return;
+      }
+      store.upsertChunk({...chunk, status: 'transcribing', wavPath});
+
+      const {sourceLang} = getSettings();
+      const result = await transcribeAudio(wavPath, sourceLang);
+      const t2 = Date.now();
+      deleteChunk(index);
+      if (gen !== this.generation) {
+        return;
+      }
+
+      let segments: WhisperSegment[] = result.segments.filter(s =>
+        s.text.trim(),
+      );
+      const isLastChunk = end >= this.videoDuration - 0.1;
+      const last = segments[segments.length - 1];
+      if (
+        !isLastChunk &&
+        segments.length >= 2 &&
+        last.t1 >= end - start - CUT_TOLERANCE_SEC &&
+        last.t0 >= MIN_CHUNK_SEC
+      ) {
+        // Sentence cut by the chunk boundary — let the next chunk own it.
+        segments = segments.slice(0, -1);
+        end = start + last.t0;
+      }
+
+      const language = result.language || this.lastLanguage;
+      this.lastLanguage = language;
+      observeSegments(segments, language);
+
+      log(
+        `chunk ${index} [${start.toFixed(1)}–${end.toFixed(1)}s] ` +
+          `extract ${t1 - t0}ms, stt ${t2 - t1}ms, ${
+            segments.length
+          } segs, lang ${language}`,
+      );
+
+      store.upsertChunk({
+        ...chunk,
+        endSec: end,
+        status: 'awaiting_translation',
+        segments,
+        language,
+      });
+      this.sttCursor = end;
+      this.translateQueue.add(index);
+    } catch (err) {
+      if (gen === this.generation) {
+        console.error(`[JITProcessor] STT chunk ${index} failed:`, err);
+        store.upsertChunk({...chunk, status: 'error', error: String(err)});
+        this.sttCursor = end; // skip it rather than loop on a bad spot
+      }
+    } finally {
+      if (gen === this.generation) {
+        this.sttBusy = false;
+      }
+    }
+
+    if (gen === this.generation) {
+      this.pumpTranslate();
+      this.pumpStt();
+    }
+  }
+
+  // ─── Stage 2: Translation ─────────────────────────────────────────────────
+
+  /** Next chunk to translate: the earliest one the viewer hasn't passed yet. */
+  private pickNextToTranslate(): AudioChunk | undefined {
+    const {chunks} = useSubtitleStore.getState();
+    const playhead = useVideoStore.getState().currentTime;
+    let best: AudioChunk | undefined;
+    let bestBehind: AudioChunk | undefined;
+    for (const idx of Array.from(this.translateQueue)) {
+      const c = chunks.get(idx);
+      if (!c || c.status !== 'awaiting_translation' || !c.segments) {
+        this.translateQueue.delete(idx);
+        continue;
+      }
+      if (c.endSec >= playhead) {
+        if (!best || c.startSec < best.startSec) {
+          best = c;
+        }
+      } else if (!bestBehind || c.startSec > bestBehind.startSec) {
+        bestBehind = c;
+      }
+    }
+    return best ?? bestBehind;
+  }
+
+  private async pumpTranslate(): Promise<void> {
+    if (this.trBusy) {
+      return;
+    }
+    const chunk = this.pickNextToTranslate();
+    if (!chunk) {
+      this.maybeRunLlmGlossary();
+      return;
+    }
+
+    const gen = this.generation;
+    this.trBusy = true;
+    this.translateQueue.delete(chunk.index);
+    const store = useSubtitleStore.getState();
+    store.upsertChunk({...chunk, status: 'translating'});
+
+    try {
+      const segments = chunk.segments ?? [];
+      const src = chunk.language ?? this.lastLanguage;
+      await this.glossaryLoading;
+      const t0 = Date.now();
+      // Lock renderings for names first seen around here, so THIS chunk
+      // already uses them.
+      await lockPendingTerms(src);
+      const t1 = Date.now();
+      const texts = await translateSegments(segments, src);
+      const t2 = Date.now();
+      if (gen !== this.generation) {
+        return; // seek() re-queued this chunk
+      }
+
+      log(
+        `chunk ${chunk.index} translate ${t2 - t1}ms` +
+          (t1 - t0 > 5 ? ` (+${t1 - t0}ms locking names)` : '') +
+          `, ${segments.length} lines`,
+      );
+
+      store.upsertChunk({
+        ...chunk,
+        status: 'ready',
+        segments: undefined,
+        cues: mapSegmentsToCues(segments, chunk.index, chunk.startSec, texts),
+      });
+      this.translatedSinceGlossary++;
+      this.recentPairs.push(
+        ...segments.map((s, i) => ({
+          original: s.text.trim(),
+          hebrew: texts[i] ?? '',
+        })),
+      );
+      this.recentPairs = this.recentPairs.slice(-24);
+      this.recentLang = src;
+    } catch (err) {
+      if (gen === this.generation) {
+        console.error(
+          `[JITProcessor] translation chunk ${chunk.index} failed:`,
+          err,
+        );
+        store.upsertChunk({...chunk, status: 'error', error: String(err)});
+      }
+    } finally {
+      if (gen === this.generation) {
+        this.trBusy = false;
+      }
+    }
+
+    if (gen === this.generation) {
+      this.pumpTranslate();
+      this.pumpStt();
+    }
+  }
+
+  // ─── LLM glossary extraction (llm engine only, idle time only) ────────────
+
+  /**
+   * The Gemma engine can also extract names with grammatical gender. It
+   * shares the model with translation, so it only runs when the
+   * translation queue is empty, and at most every LLM_GLOSSARY_EVERY
+   * chunks — it must never delay a subtitle. Holding trBusy while it runs
+   * means a newly queued chunk waits for at most one extraction call.
+   */
+  private async maybeRunLlmGlossary(): Promise<void> {
+    if (
+      getSettings().engine !== 'llm' ||
+      !isLlmReady() ||
+      this.translatedSinceGlossary < LLM_GLOSSARY_EVERY ||
+      this.recentPairs.length === 0
+    ) {
+      return;
+    }
+    const gen = this.generation;
+    this.trBusy = true;
+    this.translatedSinceGlossary = 0;
+    const pairs = this.recentPairs;
+    this.recentPairs = [];
+    try {
+      const entries = await extractGlossaryEntries(
+        pairs,
+        this.recentLang,
+        getSettings().targetLang,
+      );
+      useGlossaryStore.getState().upsertEntries(entries);
+    } finally {
+      if (gen === this.generation) {
+        this.trBusy = false;
+        this.pumpTranslate();
+      }
+    }
+  }
 }
 
 export const jitProcessor = new JITProcessor();

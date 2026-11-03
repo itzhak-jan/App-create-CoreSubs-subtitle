@@ -76,7 +76,12 @@ class TranslatorModule(reactContext: ReactApplicationContext) :
     companion object {
         const val NAME = "TranslatorModule"
 
-        private const val MAX_TOKENS = 512 // headroom for glossary-extraction JSON, not just short subtitle lines
+        // MediaPipe's maxTokens is the TOTAL context (prompt + output), and
+        // exceeding it is a native SIGSEGV, not an exception. Batched prompts
+        // (instructions + glossary + several lines) need more than 512, so use
+        // the full KV cache the bundle was built with ("_ekv2048" in the
+        // filename). TranslationService.ts also caps each batch's size.
+        private const val MAX_TOKENS = 2048
         private const val TOP_K = 40
         private const val TEMPERATURE = 0.3f // low — translation/extraction want fidelity, not creativity
     }
@@ -106,13 +111,23 @@ class TranslatorModule(reactContext: ReactApplicationContext) :
                     return@launch
                 }
 
-                val options = LlmInference.LlmInferenceOptions.builder()
-                    .setModelPath(modelPath)
-                    .setMaxTokens(MAX_TOKENS)
-                    .setMaxTopK(TOP_K) // ceiling; the actual per-call topK is set on the session below
-                    .build()
+                fun build(backend: LlmInference.Backend) =
+                    LlmInference.LlmInferenceOptions.builder()
+                        .setModelPath(modelPath)
+                        .setMaxTokens(MAX_TOKENS)
+                        .setMaxTopK(TOP_K) // ceiling; the actual per-call topK is set on the session below
+                        .setPreferredBackend(backend)
+                        .build()
 
-                llmInference = LlmInference.createFromOptions(reactApplicationContext, options)
+                // Ask for the GPU explicitly (leaves the CPU to whisper, which
+                // runs at the same time); fall back to CPU if the GPU delegate
+                // can't load this bundle.
+                llmInference = try {
+                    LlmInference.createFromOptions(reactApplicationContext, build(LlmInference.Backend.GPU))
+                } catch (e: Exception) {
+                    android.util.Log.w(NAME, "GPU backend unavailable, using CPU: ${e.message}")
+                    LlmInference.createFromOptions(reactApplicationContext, build(LlmInference.Backend.CPU))
+                }
                 promise.resolve(null)
             } catch (e: Exception) {
                 promise.reject("TRANSLATOR_INIT_ERROR", e.message, e)

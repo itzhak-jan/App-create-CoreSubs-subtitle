@@ -101,6 +101,9 @@ dependencies {
     implementation 'androidx.media3:media3-transformer:1.9.1'
     implementation 'androidx.media3:media3-effect:1.9.1'
     implementation 'androidx.media3:media3-common:1.9.1'
+    // On-device translation (default engine). Language packs (~30 MB each)
+    // are downloaded once per language by ML Kit itself, then work offline.
+    implementation 'com.google.mlkit:translate:17.0.3'
 
     // Kotlin coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
