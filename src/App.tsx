@@ -13,7 +13,16 @@ import {VideoPlayer} from './components/VideoPlayer/VideoPlayer';
 import {ExportModal} from './components/ExportModal/ExportModal';
 import {ModelSetupScreen} from './components/ModelSetup/ModelSetupScreen';
 import {initWhisper} from './services/STTService';
-import {initTranslation} from './services/TranslationService';
+import {jitProcessor} from './services/JITProcessor';
+import {
+  initTranslation,
+  isLlmReady,
+  resetTranslationCaches,
+} from './services/TranslationService';
+import {useSettingsStore} from './store/settingsStore';
+import {SettingsModal} from './components/SettingsModal/SettingsModal';
+import {GlossaryModal} from './components/GlossaryModal/GlossaryModal';
+import type {AppSettings} from './types';
 import {
   isModelPresent,
   checkForUpdates,
@@ -40,6 +49,9 @@ export default function App(): React.JSX.Element {
   const [manifest, setManifest] = useState<ModelManifest | null>(null);
   const [updateKeys, setUpdateKeys] = useState<ManifestKey[]>([]);
   const [updateModalVisible, setUpdateModalVisible] = useState(false);
+  const [settingsVisible, setSettingsVisible] = useState(false);
+  const [glossaryVisible, setGlossaryVisible] = useState(false);
+  const [setupKeys, setSetupKeys] = useState<ManifestKey[]>([]);
   const {meta, reset: resetVideo} = useVideoStore();
 
   useEffect(() => {
@@ -49,17 +61,23 @@ export default function App(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** The Gemma bundle is only required for the optional 'llm' engine. */
+  function requiredKeys(): ManifestKey[] {
+    return useSettingsStore.getState().engine === 'llm'
+      ? ['whisper', 'translator', 'font']
+      : ['whisper', 'font'];
+  }
+
   async function checkModelsAndInit() {
+    await useSettingsStore.getState().load();
     const m = await fetchManifest();
     setManifest(m);
 
-    const [whisperOk, translatorOk, fontOk] = await Promise.all([
-      isModelPresent(m.whisper),
-      isModelPresent(m.translator),
-      isModelPresent(m.font),
-    ]);
-
-    if (!whisperOk || !translatorOk || !fontOk) {
+    const keys = requiredKeys();
+    const present = await Promise.all(keys.map(k => isModelPresent(m[k])));
+    const missing = keys.filter((_, i) => !present[i]);
+    if (missing.length > 0) {
+      setSetupKeys(missing);
       setAppPhase('setup');
       return;
     }
@@ -76,10 +94,44 @@ export default function App(): React.JSX.Element {
   async function initModels(m: ModelManifest) {
     try {
       await initWhisper(modelPath(m.whisper));
-      await initTranslation(modelPath(m.translator));
     } catch (e) {
-      console.error('[App] Model init error:', e);
+      console.error('[App] Whisper init error:', e);
     }
+    await initLlmIfNeeded(m);
+  }
+
+  async function initLlmIfNeeded(m: ModelManifest) {
+    if (useSettingsStore.getState().engine !== 'llm') {
+      return;
+    }
+    try {
+      if (await isModelPresent(m.translator)) {
+        await initTranslation(modelPath(m.translator));
+      }
+    } catch (e) {
+      console.error('[App] Translator init error:', e);
+    }
+  }
+
+  async function handleSettingsChanged(prev: AppSettings, next: AppSettings) {
+    if (
+      next.targetLang !== prev.targetLang ||
+      next.sourceLang !== prev.sourceLang
+    ) {
+      resetTranslationCaches();
+    }
+    if (next.engine === 'llm' && !isLlmReady() && manifest) {
+      if (!(await isModelPresent(manifest.translator))) {
+        // Download the Gemma bundle first; the player resumes afterwards.
+        setSettingsVisible(false);
+        setSetupKeys(['translator']);
+        setAppPhase('setup');
+        return;
+      }
+      await initLlmIfNeeded(manifest);
+    }
+    // Re-run subtitles from the current position with the new settings.
+    jitProcessor.restart();
   }
 
   async function handleSetupComplete() {
@@ -88,6 +140,7 @@ export default function App(): React.JSX.Element {
     }
     await initModels(manifest);
     setUpdateKeys([]);
+    setSetupKeys([]);
     setAppPhase('ready');
   }
 
@@ -114,6 +167,7 @@ export default function App(): React.JSX.Element {
         <SafeAreaView style={styles.root}>
           <ModelSetupScreen
             manifest={manifest}
+            requiredKeys={setupKeys.length ? setupKeys : undefined}
             onComplete={handleSetupComplete}
           />
         </SafeAreaView>
@@ -145,13 +199,30 @@ export default function App(): React.JSX.Element {
             <VideoPlayer />
 
             <View style={styles.topBar}>
-              <TouchableOpacity onPress={resetVideo} style={styles.topBtn}>
+              <TouchableOpacity
+                onPress={() => {
+                  jitProcessor.reset();
+                  resetVideo();
+                }}
+                style={styles.topBtn}>
                 <Text style={styles.topBtnText}>← Back</Text>
               </TouchableOpacity>
 
               <Text style={styles.videoTitle} numberOfLines={1}>
                 {meta.displayName}
               </Text>
+
+              <TouchableOpacity
+                onPress={() => setGlossaryVisible(true)}
+                style={styles.topBtn}>
+                <Text style={styles.topBtnText}>Names</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => setSettingsVisible(true)}
+                style={styles.topBtn}>
+                <Text style={styles.topBtnText}>⚙</Text>
+              </TouchableOpacity>
 
               <TouchableOpacity
                 onPress={() => setExportVisible(true)}
@@ -183,6 +254,17 @@ export default function App(): React.JSX.Element {
         <ExportModal
           visible={exportVisible}
           onClose={() => setExportVisible(false)}
+        />
+
+        <SettingsModal
+          visible={settingsVisible}
+          onClose={() => setSettingsVisible(false)}
+          onChanged={handleSettingsChanged}
+        />
+
+        <GlossaryModal
+          visible={glossaryVisible}
+          onClose={() => setGlossaryVisible(false)}
         />
       </SafeAreaView>
     </GestureHandlerRootView>

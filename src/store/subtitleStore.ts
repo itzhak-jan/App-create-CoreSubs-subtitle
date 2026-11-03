@@ -9,7 +9,12 @@ interface SubtitleStore {
   subtitleFontSize: number;
 
   upsertChunk: (chunk: AudioChunk) => void;
-  removeChunksAfter: (mediaSec: number) => void;
+  removeChunk: (index: number) => void;
+  /** The chunk whose [startSec, endSec) range contains mediaSec, if any. */
+  chunkAt: (mediaSec: number) => AudioChunk | undefined;
+  /** Rewrites `from` → `to` in every translated cue (used when the user
+   *  corrects a glossary rendering, so already-shown subtitles match). */
+  replaceInCues: (from: string, to: string) => void;
   setActiveCue: (cue: SubtitleCue | null) => void;
   setExportState: (state: Partial<ExportState>) => void;
   setShowSubtitles: (show: boolean) => void;
@@ -37,13 +42,42 @@ export const useSubtitleStore = create<SubtitleStore>((set, get) => ({
       return {chunks: next};
     }),
 
-  removeChunksAfter: mediaSec =>
+  removeChunk: index =>
     set(state => {
+      if (!state.chunks.has(index)) {
+        return state;
+      }
+      const next = new Map(state.chunks);
+      next.delete(index);
+      return {chunks: next};
+    }),
+
+  chunkAt: mediaSec => {
+    for (const chunk of get().chunks.values()) {
+      if (mediaSec >= chunk.startSec && mediaSec < chunk.endSec) {
+        return chunk;
+      }
+    }
+    return undefined;
+  },
+
+  replaceInCues: (from, to) =>
+    set(state => {
+      if (!from || from === to) {
+        return state;
+      }
       const next = new Map(state.chunks);
       for (const [idx, chunk] of next) {
-        if (chunk.startSec >= mediaSec) {
-          next.delete(idx);
+        if (!chunk.cues.some(c => c.hebrewText.includes(from))) {
+          continue;
         }
+        next.set(idx, {
+          ...chunk,
+          cues: chunk.cues.map(c => ({
+            ...c,
+            hebrewText: c.hebrewText.split(from).join(to),
+          })),
+        });
       }
       return {chunks: next, activeCue: null};
     }),

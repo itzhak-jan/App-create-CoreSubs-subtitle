@@ -6,7 +6,8 @@
  * Downloads runtime assets described by the manifest (src/services/
  * ModelManifest.ts) to DocumentDirectory:
  *   1. Whisper STT model                (~148 MB)
- *   2. TranslateGemma-4B translation model (size TBD — see ModelManifest.ts)
+ *   2. Gemma translation model — only for the optional 'llm' engine; the
+ *      default ML Kit engine downloads its own small language packs
  *   3. Rubik-Regular.ttf Hebrew font for export (~140 KB)
  *
  * None of these are bundled in the APK. Downloading at runtime keeps the
@@ -43,6 +44,9 @@ interface ModelSetupScreenProps {
   /** Restrict to a subset of assets — used by the "update available" flow
    *  to re-download only the outdated ones. Defaults to all three. */
   onlyKeys?: ManifestKey[];
+  /** First-time setup: which assets are required. Defaults to all three.
+   *  (The Gemma translator is only needed for the 'llm' engine.) */
+  requiredKeys?: ManifestKey[];
 }
 
 const ASSET_LABELS: Record<
@@ -115,8 +119,12 @@ export function ModelSetupScreen({
   manifest,
   onComplete,
   onlyKeys,
+  requiredKeys,
 }: ModelSetupScreenProps): React.JSX.Element {
-  const keys = useMemo(() => onlyKeys ?? ALL_KEYS, [onlyKeys]);
+  const keys = useMemo(
+    () => onlyKeys ?? requiredKeys ?? ALL_KEYS,
+    [onlyKeys, requiredKeys],
+  );
   const isUpdate = !!onlyKeys;
 
   const [phase, setPhase] = useState<DownloadPhase>('idle');

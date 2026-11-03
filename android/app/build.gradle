@@ -81,6 +81,10 @@ dependencies {
     // (see TranslatorModule.kt for why this replaced a raw TFLite approach).
     implementation 'com.google.mediapipe:tasks-genai:0.10.27'
 
+    // On-device translation (default engine). Language packs (~30 MB each)
+    // are downloaded once per language by ML Kit itself, then work offline.
+    implementation 'com.google.mlkit:translate:17.0.3'
+
     // Kotlin coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 }

@@ -31,18 +31,18 @@ export function PlayerControls({
 }: PlayerControlsProps): React.JSX.Element {
   const {currentTime, duration, isPaused, playbackRate, setPlaybackRate} =
     useVideoStore();
-  const {showSubtitles, setShowSubtitles, chunks} = useSubtitleStore();
+  const {showSubtitles, setShowSubtitles, chunkAt} = useSubtitleStore();
 
   const isSeeking = useRef(false);
   const seekTime = useRef(0);
 
-  // Determine pipeline status for the current position
-  const currentChunkIdx = Math.floor(currentTime / 60);
-  const currentChunk = chunks.get(currentChunkIdx);
+  // Pipeline status for the current position. No chunk yet also counts as
+  // processing (the STT stage hasn't reached this point).
+  const currentChunk = chunkAt(currentTime);
   const isProcessing =
-    currentChunk?.status === 'extracting' ||
-    currentChunk?.status === 'transcribing' ||
-    currentChunk?.status === 'translating';
+    !!duration &&
+    (!currentChunk ||
+      (currentChunk.status !== 'ready' && currentChunk.status !== 'error'));
 
   const panResponder = useRef(
     PanResponder.create({

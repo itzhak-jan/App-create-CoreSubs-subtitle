@@ -10,8 +10,10 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * React Native bridge to Google's TranslateGemma-4B, run through the
- * MediaPipe LLM Inference ("Task Genai") API. Deliberately thin: prompt
+ * React Native bridge to a Gemma model (currently Gemma3-1B-IT — see
+ * models-manifest.json) run through the MediaPipe LLM Inference
+ * ("Task Genai") API. This is the optional 'llm' translation engine; the
+ * default is ML Kit (MlKitTranslatorModule.kt), which is much faster. Deliberately thin: prompt
  * construction (translation prompts with glossary hints, glossary
  * extraction prompts) lives in TypeScript (TranslationService.ts,
  * GlossaryExtractor.ts) so those can be iterated on without a native
@@ -59,7 +61,11 @@ class TranslatorModule(reactContext: ReactApplicationContext) :
     companion object {
         const val NAME = "TranslatorModule"
 
-        private const val MAX_TOKENS = 512 // headroom for glossary-extraction JSON, not just short subtitle lines
+        // MediaPipe's maxTokens is the TOTAL context (prompt + output), not just
+        // the output. A batched prompt (instructions + glossary + ~8 lines)
+        // easily passes 512, so use the full KV cache the bundle was built
+        // with (the "_ekv2048" in the filename).
+        private const val MAX_TOKENS = 2048
         private const val TOP_K = 40
         private const val TEMPERATURE = 0.3f // low — translation/extraction want fidelity, not creativity
     }
@@ -89,14 +95,24 @@ class TranslatorModule(reactContext: ReactApplicationContext) :
                     return@launch
                 }
 
-                val options = LlmInference.LlmInferenceOptions.builder()
-                    .setModelPath(modelPath)
-                    .setMaxTokens(MAX_TOKENS)
-                    .setTopK(TOP_K)
-                    .setTemperature(TEMPERATURE)
-                    .build()
+                fun build(backend: LlmInference.Backend) =
+                    LlmInference.LlmInferenceOptions.builder()
+                        .setModelPath(modelPath)
+                        .setMaxTokens(MAX_TOKENS)
+                        .setTopK(TOP_K)
+                        .setTemperature(TEMPERATURE)
+                        .setPreferredBackend(backend)
+                        .build()
 
-                llmInference = LlmInference.createFromOptions(reactApplicationContext, options)
+                // Ask for the GPU explicitly (frees the CPU for whisper, which
+                // runs at the same time); fall back to CPU if the GPU
+                // delegate can't load this bundle on this device.
+                llmInference = try {
+                    LlmInference.createFromOptions(reactApplicationContext, build(LlmInference.Backend.GPU))
+                } catch (e: Exception) {
+                    android.util.Log.w(NAME, "GPU backend unavailable, using CPU: ${e.message}")
+                    LlmInference.createFromOptions(reactApplicationContext, build(LlmInference.Backend.CPU))
+                }
                 promise.resolve(null)
             } catch (e: Exception) {
                 promise.reject("TRANSLATOR_INIT_ERROR", e.message, e)
