@@ -8,7 +8,8 @@ name: Android Release Build
 # and the workflow completes quickly.
 on:
   push:
-    branches: [main]
+    # claude/** too, so feature branches are compile-checked before merge.
+    branches: [main, 'claude/**']
   workflow_dispatch:
 
 # Cancel any in-progress run for the same branch to avoid queued builds
