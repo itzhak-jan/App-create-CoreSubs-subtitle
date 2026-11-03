@@ -10,8 +10,6 @@ import {
 } from 'react-native';
 import {useVideoStore} from '../../store/videoStore';
 import {useSubtitleStore} from '../../store/subtitleStore';
-import {chunkIndexForTime} from '../../services/TimestampCalculator';
-import {DEFAULT_PIPELINE_CONFIG} from '../../types';
 
 const PLAYBACK_RATES = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0];
 const {width: SCREEN_W} = Dimensions.get('window');
@@ -19,6 +17,7 @@ const {width: SCREEN_W} = Dimensions.get('window');
 const STATUS_LABELS: Record<string, string> = {
   extracting: 'Extracting audio…',
   transcribing: 'Transcribing…',
+  awaiting_translation: 'Translating…',
   translating: 'Translating…',
 };
 
@@ -39,23 +38,20 @@ export function PlayerControls({
 }: PlayerControlsProps): React.JSX.Element {
   const {currentTime, duration, isPaused, playbackRate, setPlaybackRate} =
     useVideoStore();
-  const {showSubtitles, setShowSubtitles, chunks} = useSubtitleStore();
+  const {showSubtitles, setShowSubtitles, chunkAt} = useSubtitleStore();
 
   const isSeeking = useRef(false);
   const seekTime = useRef(0);
 
-  // Determine pipeline status for the current position. Chunk boundaries
-  // aren't a uniform grid (chunk 0 is shorter — see DEFAULT_PIPELINE_CONFIG
-  // in types/index.ts), so this must go through the same helper
-  // JITProcessor uses rather than assume every chunk is chunkDuration long.
-  const currentChunkIdx = chunkIndexForTime(
-    currentTime,
-    DEFAULT_PIPELINE_CONFIG,
-  );
-  const currentChunk = chunks.get(currentChunkIdx);
-  const statusLabel = currentChunk?.status
-    ? STATUS_LABELS[currentChunk.status]
-    : undefined;
+  // Pipeline status for the current position. Chunks no longer sit on a
+  // fixed grid (they follow speech and survive seeks), so look the chunk up
+  // by time range. No chunk yet means the STT stage hasn't reached here.
+  const currentChunk = chunkAt(currentTime);
+  const statusLabel = !duration
+    ? undefined
+    : !currentChunk
+    ? 'Waiting for audio…'
+    : STATUS_LABELS[currentChunk.status];
 
   const panResponder = useRef(
     PanResponder.create({
