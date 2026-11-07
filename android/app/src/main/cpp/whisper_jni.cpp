@@ -80,6 +80,8 @@ Java_com_coresubsapp_whisper_WhisperModule_nativeInit(
     // for a GPU that isn't there. base/small models are fast enough on the
     // Tensor G5 big cores for a pipeline that keeps STT running ahead.
     cparams.use_gpu = false;
+    // Flash attention cuts CPU time in the decoder's attention layers.
+    cparams.flash_attn = true;
 
     whisper_context *ctx = whisper_init_from_file_with_params(path, cparams);
     env->ReleaseStringUTFChars(modelPath, path);
@@ -135,7 +137,9 @@ Java_com_coresubsapp_whisper_WhisperModule_nativeTranscribe(
     }
 
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.n_threads        = 4;
+    // Tensor G5: 1 big + 5 mid + 2 little cores. 6 threads = big + mids;
+    // the little cores are left for UI, video decode and ML Kit.
+    params.n_threads        = 6;
     params.translate        = false;
     params.language         = lang.c_str(); // "auto" → whisper detects
     params.no_context       = true;
@@ -143,6 +147,19 @@ Java_com_coresubsapp_whisper_WhisperModule_nativeTranscribe(
     params.print_realtime   = false;
     params.print_progress   = false;
     params.print_timestamps = false;
+    // Whisper's encoder always processes a 30 s window (1500 frames), so an
+    // 8 s chunk costs as much as a 30 s one. For shorter audio, shrink the
+    // encoder context to the audio length (+ margin) — several times faster
+    // for the short first chunk after load/seek. Floor of 512 frames
+    // (~10 s): much smaller contexts degrade accuracy noticeably.
+    {
+        const float secs = static_cast<float>(pcm.size()) / 16000.0f;
+        if (secs < 28.0f) {
+            int ctx_frames = static_cast<int>(secs * 50.0f) + 64;
+            if (ctx_frames < 512) ctx_frames = 512;
+            if (ctx_frames < 1500) params.audio_ctx = ctx_frames;
+        }
+    }
     params.abort_callback           = abort_cb;
     params.abort_callback_user_data = nullptr;
 

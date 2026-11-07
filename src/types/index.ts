@@ -143,8 +143,11 @@ export interface PipelineConfig {
   bufferAheadSec: number;
 }
 
+// chunkDuration stays just under 30 s: whisper's encoder processes a fixed
+// 30 s window per call, so anything shorter wastes compute per second of
+// audio (measured on-device: ~18 s per call for 8 s and 20 s chunks alike).
 export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
-  chunkDuration: 20,
+  chunkDuration: 28,
   firstChunkDurationSec: 8,
   bufferAheadSec: 90,
 };

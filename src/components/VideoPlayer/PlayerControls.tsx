@@ -5,14 +5,12 @@ import {
   Text,
   TouchableOpacity,
   PanResponder,
-  Dimensions,
   ActivityIndicator,
 } from 'react-native';
 import {useVideoStore} from '../../store/videoStore';
 import {useSubtitleStore} from '../../store/subtitleStore';
 
 const PLAYBACK_RATES = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0];
-const {width: SCREEN_W} = Dimensions.get('window');
 
 const STATUS_LABELS: Record<string, string> = {
   extracting: 'Extracting audio…',
@@ -53,24 +51,45 @@ export function PlayerControls({
     ? 'Waiting for audio…'
     : STATUS_LABELS[currentChunk.status];
 
+  // The PanResponder is created once, so it must read live values through
+  // refs. (It used to close over the first render's `duration` — 0 before
+  // the video loaded — so every drag computed ratio × 0 and seeked to the
+  // start.) Position comes from pageX minus the track's measured left edge:
+  // locationX is relative to whichever child view is touched (fill/handle),
+  // and the module-level screen width is wrong after rotating to landscape.
+  const durationRef = useRef(duration);
+  durationRef.current = duration;
+  const onSeekRef = useRef(onSeek);
+  onSeekRef.current = onSeek;
+  const trackRef = useRef<View>(null);
+  const track = useRef({x: 0, width: 1});
+
+  const measureTrack = useCallback(() => {
+    trackRef.current?.measureInWindow((x, _y, width) => {
+      if (width > 0) {
+        track.current = {x, width};
+      }
+    });
+  }, []);
+
+  const ratioAt = (pageX: number) =>
+    Math.max(0, Math.min(1, (pageX - track.current.x) / track.current.width));
+
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onPanResponderGrant: evt => {
         isSeeking.current = true;
-        const ratio = evt.nativeEvent.locationX / (SCREEN_W - 32);
-        seekTime.current = ratio * duration;
+        seekTime.current = ratioAt(evt.nativeEvent.pageX) * durationRef.current;
       },
       onPanResponderMove: evt => {
-        const ratio = Math.max(
-          0,
-          Math.min(1, evt.nativeEvent.locationX / (SCREEN_W - 32)),
-        );
-        seekTime.current = ratio * duration;
+        seekTime.current = ratioAt(evt.nativeEvent.pageX) * durationRef.current;
       },
       onPanResponderRelease: () => {
         isSeeking.current = false;
-        onSeek(seekTime.current);
+        if (durationRef.current > 0) {
+          onSeekRef.current(seekTime.current);
+        }
       },
     }),
   ).current;
@@ -95,7 +114,11 @@ export function PlayerControls({
       )}
 
       {/* Seek bar */}
-      <View style={styles.seekBarTrack} {...panResponder.panHandlers}>
+      <View
+        ref={trackRef}
+        onLayout={measureTrack}
+        style={styles.seekBarTrack}
+        {...panResponder.panHandlers}>
         <View style={[styles.seekBarFill, {width: `${progress * 100}%`}]} />
         <View style={[styles.seekHandle, {left: `${progress * 100}%`}]} />
       </View>
