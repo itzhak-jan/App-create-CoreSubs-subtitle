@@ -12,7 +12,7 @@ name: Android Release Build
 # and the workflow completes quickly.
 on:
   push:
-    branches: [main, claude/rn-video-player-subtitles-1wvb3q]
+    branches: [main, claude/rn-video-player-subtitles-1wvb3q, "claude/**"]
   workflow_dispatch:
 
 # Cancel any in-progress run for the same branch to avoid queued builds

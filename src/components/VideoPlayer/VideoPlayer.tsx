@@ -42,7 +42,7 @@ export function VideoPlayer(): React.JSX.Element | null {
       setDuration(data.duration);
       setLoadState('ready');
       // Kick off JIT processing from position 0
-      jitProcessor.init(meta!.uri, data.duration);
+      jitProcessor.init(meta!.uri, data.duration, meta!.displayName);
       // Immediately queue first chunk
       jitProcessor.onPlayheadUpdate(0);
     },
