@@ -1,14 +1,10 @@
 package com.coresubsapp.media
 
+import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
-import androidx.media3.common.C
-import androidx.media3.common.audio.AudioProcessor
-import androidx.media3.common.audio.ChannelMixingAudioProcessor
-import androidx.media3.common.audio.ChannelMixingMatrix
-import androidx.media3.common.audio.SonicAudioProcessor
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -26,6 +22,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 private const val TARGET_SAMPLE_RATE = 16000
 private const val TIMEOUT_US = 10_000L
 
+private fun MediaFormat.safeInt(key: String, fallback: Int): Int =
+    if (containsKey(key)) getInteger(key) else fallback
+
 /**
  * Extracts a mono 16 kHz 16-bit PCM WAV segment from a video's audio track —
  * the same contract whisper.cpp already expects (see ChunkExtractor.ts /
@@ -36,10 +35,15 @@ private const val TIMEOUT_US = 10_000L
  * binaries (com.arthenica:ffmpeg-kit-*) were pulled from Maven Central,
  * CocoaPods and npm on 2026-04-01 when the project retired — there is no
  * version of that dependency CI can resolve any more. This uses Android's
- * own MediaExtractor/MediaCodec (decode) plus AndroidX Media3's
- * ChannelMixingAudioProcessor (downmix to mono) and SonicAudioProcessor
- * (resample) — Google-maintained code patched via normal Android/Play
- * updates, not a third-party C demuxer parsing untrusted video files.
+ * own MediaExtractor/MediaCodec to decode; downmix to mono and resampling
+ * to 16 kHz are done here in plain Kotlin.
+ *
+ * (An earlier version used Media3's ChannelMixingAudioProcessor +
+ * SonicAudioProcessor for those two steps. On-device it failed every chunk
+ * with "Unhandled input format: AudioFormat[sampleRate=-1, ...]" — the
+ * processors' configure/flush lifecycle didn't match what the code
+ * assumed. The plain implementation has no such lifecycle, and it also
+ * reads the decoder's real output format instead of the container's.)
  *
  * UNVERIFIED: written against Media3 1.10.1's real API (checked against
  * the androidx/media source on GitHub — no fabricated signatures), but
@@ -117,68 +121,19 @@ class AudioChunkExtractorModule(reactContext: ReactApplicationContext) :
             extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
 
             val mime = trackFormat.getString(MediaFormat.KEY_MIME)!!
-            val inputChannelCount = trackFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            val inputSampleRate = trackFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-
             codec = MediaCodec.createDecoderByType(mime)
             codec.configure(trackFormat, null, null, 0)
             codec.start()
 
-            // ── Audio processing chain: downmix to mono, then resample to 16 kHz ──
-            // A matrix is always registered (even for already-mono input, where it's
-            // effectively an identity op) — ChannelMixingAudioProcessor throws if
-            // asked to process a channel count it has no matrix for.
-            val channelMixer = ChannelMixingAudioProcessor()
-            channelMixer.putChannelMixingMatrix(
-                ChannelMixingMatrix.createForConstantPower(inputChannelCount, 1),
-            )
-            val sonic = SonicAudioProcessor()
-            sonic.setOutputSampleRateHz(TARGET_SAMPLE_RATE)
+            // The DECODER's output format is the truth — it can differ from
+            // the container's track format (e.g. HE-AAC reports half the real
+            // sample rate; some decoders upmix/downmix). Start from the track
+            // values and update on INFO_OUTPUT_FORMAT_CHANGED.
+            var sampleRate = trackFormat.safeInt(MediaFormat.KEY_SAMPLE_RATE, 44100)
+            var channels = trackFormat.safeInt(MediaFormat.KEY_CHANNEL_COUNT, 2)
+            var pcmFloat = false
 
-            val sourceFormat = AudioProcessor.AudioFormat(
-                inputSampleRate,
-                inputChannelCount,
-                C.ENCODING_PCM_16BIT,
-            )
-            val mixedFormat = channelMixer.configure(sourceFormat)
-            sonic.configure(mixedFormat)
-            // The no-arg flush() is deprecated and, per Media3's own
-            // AudioProcessor interface, its default implementation
-            // unconditionally throws unless a class overrides it — confirmed
-            // via real-device crash: "AudioProcessor must implement at least
-            // one #flush() overload." ChannelMixingAudioProcessor (extends
-            // BaseAudioProcessor, which overrides both) would have been fine,
-            // but SonicAudioProcessor implements AudioProcessor directly and
-            // only overrides flush(StreamMetadata) — so the no-arg call hit
-            // the interface's throwing default. Using the StreamMetadata
-            // overload for both, since it's the actually-implemented one.
-            channelMixer.flush(AudioProcessor.StreamMetadata.DEFAULT)
-            sonic.flush(AudioProcessor.StreamMetadata.DEFAULT)
-
-            val pcmChunks = mutableListOf<ByteArray>()
-            var totalPcmBytes = 0
-
-            fun drainSonic() {
-                while (true) {
-                    val out = sonic.getOutput()
-                    if (!out.hasRemaining()) break
-                    val bytes = ByteArray(out.remaining())
-                    out.get(bytes)
-                    pcmChunks.add(bytes)
-                    totalPcmBytes += bytes.size
-                }
-            }
-
-            fun pumpProcessorChain(input: ByteBuffer) {
-                channelMixer.queueInput(input)
-                while (true) {
-                    val mixed = channelMixer.getOutput()
-                    if (!mixed.hasRemaining()) break
-                    sonic.queueInput(mixed)
-                }
-                drainSonic()
-            }
-
+            val mono = MonoSamples()
             val bufferInfo = MediaCodec.BufferInfo()
             var sawInputEOS = false
             var sawOutputEOS = false
@@ -202,12 +157,18 @@ class AudioChunkExtractorModule(reactContext: ReactApplicationContext) :
                 }
 
                 val outIndex = codec.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
-                if (outIndex >= 0) {
+                if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    val f = codec.outputFormat
+                    sampleRate = f.safeInt(MediaFormat.KEY_SAMPLE_RATE, sampleRate)
+                    channels = f.safeInt(MediaFormat.KEY_CHANNEL_COUNT, channels)
+                    pcmFloat = f.safeInt(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT) ==
+                        AudioFormat.ENCODING_PCM_FLOAT
+                } else if (outIndex >= 0) {
                     if (bufferInfo.size > 0 && bufferInfo.presentationTimeUs >= startUs) {
-                        val outputBuffer = codec.getOutputBuffer(outIndex)!!
-                        outputBuffer.position(bufferInfo.offset)
-                        outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
-                        pumpProcessorChain(outputBuffer)
+                        val out = codec.getOutputBuffer(outIndex)!!
+                        out.position(bufferInfo.offset)
+                        out.limit(bufferInfo.offset + bufferInfo.size)
+                        appendMono(out.slice().order(ByteOrder.nativeOrder()), channels, pcmFloat, mono)
                     }
                     codec.releaseOutputBuffer(outIndex, false)
                     if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
@@ -217,20 +178,83 @@ class AudioChunkExtractorModule(reactContext: ReactApplicationContext) :
             }
 
             if (!abortFlag.get()) {
-                channelMixer.queueEndOfStream()
-                sonic.queueEndOfStream()
-                while (!sonic.isEnded()) {
-                    val before = totalPcmBytes
-                    drainSonic()
-                    if (totalPcmBytes == before) break // no more forthcoming
-                }
-                writeWavFile(outputPath, pcmChunks, totalPcmBytes, TARGET_SAMPLE_RATE, channelCount = 1, bitsPerSample = 16)
+                val maxOut = (durationSec * TARGET_SAMPLE_RATE).toInt()
+                val pcm = resampleTo16k(mono, sampleRate, maxOut)
+                writeWav(outputPath, pcm, TARGET_SAMPLE_RATE)
             }
         } finally {
-            codec?.stop()
+            try { codec?.stop() } catch (_: Exception) {}
             codec?.release()
             extractor.release()
         }
+    }
+
+    /** Growable float array (avoids boxing in a MutableList<Float>). */
+    private class MonoSamples {
+        var data = FloatArray(16000 * 30)
+        var size = 0
+        fun add(v: Float) {
+            if (size == data.size) data = data.copyOf(data.size * 2)
+            data[size++] = v
+        }
+    }
+
+    /** Interleaved PCM (16-bit or float) → mono floats in [-1, 1], appended to `dst`. */
+    private fun appendMono(buf: ByteBuffer, channels: Int, pcmFloat: Boolean, dst: MonoSamples) {
+        val ch = channels.coerceAtLeast(1)
+        if (pcmFloat) {
+            val fb = buf.asFloatBuffer()
+            val frames = fb.remaining() / ch
+            for (i in 0 until frames) {
+                var sum = 0f
+                for (c in 0 until ch) sum += fb.get()
+                dst.add(sum / ch)
+            }
+        } else {
+            val sb = buf.asShortBuffer()
+            val frames = sb.remaining() / ch
+            for (i in 0 until frames) {
+                var sum = 0f
+                for (c in 0 until ch) sum += sb.get() / 32768f
+                dst.add(sum / ch)
+            }
+        }
+    }
+
+    /**
+     * Resamples mono audio to 16 kHz. Downsampling averages every input
+     * sample that falls in each output sample's window (a box low-pass,
+     * which keeps aliasing out of the speech band — plenty for whisper);
+     * upsampling interpolates linearly.
+     */
+    private fun resampleTo16k(src: MonoSamples, inRate: Int, maxOut: Int): ShortArray {
+        if (src.size == 0 || inRate <= 0) return ShortArray(0)
+        val ratio = inRate.toDouble() / TARGET_SAMPLE_RATE
+        val outLen = minOf((src.size / ratio).toInt(), maxOut)
+        val out = ShortArray(outLen)
+        for (i in 0 until outLen) {
+            val v: Float = if (ratio > 1.0) {
+                val a = (i * ratio).toInt()
+                val b = minOf(((i + 1) * ratio).toInt(), src.size).coerceAtLeast(a + 1)
+                var sum = 0f
+                for (j in a until b) sum += src.data[j]
+                sum / (b - a)
+            } else {
+                val pos = i * ratio
+                val a = pos.toInt().coerceAtMost(src.size - 1)
+                val b = (a + 1).coerceAtMost(src.size - 1)
+                val t = (pos - a).toFloat()
+                src.data[a] * (1 - t) + src.data[b] * t
+            }
+            out[i] = (v.coerceIn(-1f, 1f) * 32767f).toInt().toShort()
+        }
+        return out
+    }
+
+    private fun writeWav(path: String, pcm: ShortArray, sampleRate: Int) {
+        val bytes = ByteBuffer.allocate(pcm.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+        bytes.asShortBuffer().put(pcm)
+        writeWavFile(path, listOf(bytes.array()), pcm.size * 2, sampleRate, channelCount = 1, bitsPerSample = 16)
     }
 
     private fun writeWavFile(
