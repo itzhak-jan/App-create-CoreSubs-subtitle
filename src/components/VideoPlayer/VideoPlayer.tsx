@@ -1,18 +1,21 @@
-import React, {useCallback, useRef} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
   StyleSheet,
   View,
   TouchableWithoutFeedback,
   StatusBar,
+  Text,
+  type GestureResponderEvent,
 } from 'react-native';
 import Video, {type VideoRef} from 'react-native-video';
 import {useVideoStore} from '../../store/videoStore';
 import {SubtitleOverlay} from './SubtitleOverlay';
-import {PlayerControls} from './PlayerControls';
+import {PlayerControls, SKIP_SEC} from './PlayerControls';
 import {onPlayheadProgress} from '../../services/SubtitleManager';
 import {jitProcessor} from '../../services/JITProcessor';
 
 const PROGRESS_INTERVAL_MS = 250;
+const DOUBLE_TAP_MS = 280;
 
 export function VideoPlayer(): React.JSX.Element | null {
   const videoRef = useRef<VideoRef>(null);
@@ -49,24 +52,100 @@ export function VideoPlayer(): React.JSX.Element | null {
     [setDuration, setLoadState, meta],
   );
 
-  const handleSeek = useCallback((timeSec: number) => {
-    videoRef.current?.seek(timeSec);
-    // Flush pipeline and restart from new position
-    jitProcessor.seek(timeSec);
-  }, []);
+  const handleSeek = useCallback(
+    (timeSec: number) => {
+      const {duration} = useVideoStore.getState();
+      const t = Math.max(0, Math.min(timeSec, Math.max(0, duration - 0.5)));
+      videoRef.current?.seek(t);
+      // Update the store right away so the seek bar and the pipeline see
+      // the new position before the next onProgress tick.
+      setCurrentTime(t);
+      // Flush pipeline and restart from new position
+      jitProcessor.seek(t);
+    },
+    [setCurrentTime],
+  );
+
+  const [skipFlash, setSkipFlash] = useState<{
+    side: 'left' | 'right';
+    key: number;
+  } | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleSkip = useCallback(
+    (deltaSec: number) => {
+      handleSeek(useVideoStore.getState().currentTime + deltaSec);
+      setSkipFlash({side: deltaSec < 0 ? 'left' : 'right', key: Date.now()});
+      if (flashTimer.current) {
+        clearTimeout(flashTimer.current);
+      }
+      flashTimer.current = setTimeout(() => setSkipFlash(null), 600);
+    },
+    [handleSeek],
+  );
 
   const handleTogglePlay = useCallback(() => {
-    setIsPaused(!isPaused);
-  }, [isPaused, setIsPaused]);
+    setIsPaused(!useVideoStore.getState().isPaused);
+  }, [setIsPaused]);
+
+  // Tap = play/pause; double-tap on the left/right third = ∓15 s (like
+  // YouTube). The single tap waits DOUBLE_TAP_MS to rule out a double.
+  const viewWidth = useRef(1);
+  const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTap = useRef(0);
+
+  const handleVideoPress = useCallback(
+    (e: GestureResponderEvent) => {
+      const x = e.nativeEvent.locationX;
+      const now = Date.now();
+      if (now - lastTap.current < DOUBLE_TAP_MS) {
+        if (tapTimer.current) {
+          clearTimeout(tapTimer.current);
+          tapTimer.current = null;
+        }
+        lastTap.current = 0;
+        if (x < viewWidth.current / 3) {
+          handleSkip(-SKIP_SEC);
+        } else if (x > (viewWidth.current * 2) / 3) {
+          handleSkip(SKIP_SEC);
+        } else {
+          handleTogglePlay();
+        }
+        return;
+      }
+      lastTap.current = now;
+      tapTimer.current = setTimeout(() => {
+        tapTimer.current = null;
+        handleTogglePlay();
+      }, DOUBLE_TAP_MS);
+    },
+    [handleSkip, handleTogglePlay],
+  );
+
+  useEffect(
+    () => () => {
+      if (tapTimer.current) {
+        clearTimeout(tapTimer.current);
+      }
+      if (flashTimer.current) {
+        clearTimeout(flashTimer.current);
+      }
+    },
+    [],
+  );
 
   if (!meta) {
     return null;
   }
 
   return (
-    <View style={styles.root}>
+    <View
+      style={styles.root}
+      onLayout={e => {
+        viewWidth.current = Math.max(1, e.nativeEvent.layout.width);
+      }}>
       <StatusBar hidden />
-      <TouchableWithoutFeedback onPress={handleTogglePlay}>
+      <TouchableWithoutFeedback onPress={handleVideoPress}>
         <Video
           ref={videoRef}
           source={{uri: meta.uri}}
@@ -92,7 +171,25 @@ export function VideoPlayer(): React.JSX.Element | null {
 
       <SubtitleOverlay />
 
-      <PlayerControls onSeek={handleSeek} onTogglePlay={handleTogglePlay} />
+      {skipFlash && (
+        <View
+          key={skipFlash.key}
+          pointerEvents="none"
+          style={[
+            styles.skipFlash,
+            skipFlash.side === 'left' ? styles.skipLeft : styles.skipRight,
+          ]}>
+          <Text style={styles.skipText}>
+            {skipFlash.side === 'left' ? `⟲ ${SKIP_SEC}` : `${SKIP_SEC} ⟳`}
+          </Text>
+        </View>
+      )}
+
+      <PlayerControls
+        onSeek={handleSeek}
+        onSkip={handleSkip}
+        onTogglePlay={handleTogglePlay}
+      />
     </View>
   );
 }
@@ -105,4 +202,15 @@ const styles = StyleSheet.create({
   video: {
     ...StyleSheet.absoluteFillObject,
   },
+  skipFlash: {
+    position: 'absolute',
+    top: '40%',
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 24,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  skipLeft: {left: '12%'},
+  skipRight: {right: '12%'},
+  skipText: {color: '#FFF', fontSize: 18, fontWeight: '700'},
 });

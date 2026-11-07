@@ -52,7 +52,7 @@ import {useVideoStore} from '../store/videoStore';
  *  as cut off mid-sentence. */
 const CUT_TOLERANCE_SEC = 1.0;
 /** Never shrink a chunk below this when re-aligning to speech. */
-const MIN_CHUNK_SEC = 3;
+const MIN_CHUNK_SEC = 12; // every whisper call costs the same, so avoid tiny chunks
 /** With the LLM engine, run glossary extraction every N translated chunks. */
 const LLM_GLOSSARY_EVERY = 3;
 
@@ -81,6 +81,8 @@ class JITProcessor {
   private translateQueue = new Set<number>();
   private translatedSinceGlossary = 0;
   private lastLanguage = 'en';
+  /** Language whisper detected for this video (auto mode), reused afterwards. */
+  private detectedLanguage: string | null = null;
   private videoName = '';
   private glossaryLoading: Promise<void> = Promise.resolve();
   private recentPairs: Array<{original: string; hebrew: string}> = [];
@@ -109,6 +111,7 @@ class JITProcessor {
     this.translateQueue.clear();
     this.translatedSinceGlossary = 0;
     this.recentPairs = [];
+    this.detectedLanguage = null;
     resetGlossaryDetection();
 
     const {sourceLang, targetLang} = getSettings();
@@ -295,8 +298,14 @@ class JITProcessor {
       }
       store.upsertChunk({...chunk, status: 'transcribing', wavPath});
 
+      // With auto-detect, detect once per video and then pass the language
+      // explicitly: detection costs whisper an extra encoder pass per call.
       const {sourceLang} = getSettings();
-      const result = await transcribeAudio(wavPath, sourceLang);
+      const lang =
+        sourceLang === 'auto' && this.detectedLanguage
+          ? this.detectedLanguage
+          : sourceLang;
+      const result = await transcribeAudio(wavPath, lang);
       const t2 = Date.now();
       deleteChunk(index);
       if (gen !== this.generation) {
@@ -321,6 +330,9 @@ class JITProcessor {
 
       const language = result.language || this.lastLanguage;
       this.lastLanguage = language;
+      if (sourceLang === 'auto' && segments.length > 0) {
+        this.detectedLanguage = language;
+      }
       observeSegments(segments, language);
 
       log(

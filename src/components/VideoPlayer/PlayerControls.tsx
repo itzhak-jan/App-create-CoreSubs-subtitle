@@ -1,4 +1,4 @@
-import React, {useCallback, useRef} from 'react';
+import React, {useCallback, useRef, useState} from 'react';
 import {
   StyleSheet,
   View,
@@ -10,6 +10,7 @@ import {
 import {useVideoStore} from '../../store/videoStore';
 import {useSubtitleStore} from '../../store/subtitleStore';
 
+export const SKIP_SEC = 15;
 const PLAYBACK_RATES = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0];
 
 const STATUS_LABELS: Record<string, string> = {
@@ -27,17 +28,21 @@ function formatTime(sec: number): string {
 
 interface PlayerControlsProps {
   onSeek: (timeSec: number) => void;
+  /** Relative jump in seconds (negative = back). */
+  onSkip: (deltaSec: number) => void;
   onTogglePlay: () => void;
 }
 
 export function PlayerControls({
   onSeek,
+  onSkip,
   onTogglePlay,
 }: PlayerControlsProps): React.JSX.Element {
   const {currentTime, duration, isPaused, playbackRate, setPlaybackRate} =
     useVideoStore();
   const {showSubtitles, setShowSubtitles, chunkAt} = useSubtitleStore();
 
+  const [showRemaining, setShowRemaining] = useState(false);
   const isSeeking = useRef(false);
   const seekTime = useRef(0);
 
@@ -51,45 +56,49 @@ export function PlayerControls({
     ? 'Waiting for audio…'
     : STATUS_LABELS[currentChunk.status];
 
-  // The PanResponder is created once, so it must read live values through
-  // refs. (It used to close over the first render's `duration` — 0 before
-  // the video loaded — so every drag computed ratio × 0 and seeked to the
-  // start.) Position comes from pageX minus the track's measured left edge:
-  // locationX is relative to whichever child view is touched (fill/handle),
-  // and the module-level screen width is wrong after rotating to landscape.
+  // The PanResponder is created once, so it reads live values through refs
+  // (closing over the first render's duration — 0 — made every drag seek
+  // to the start). The position is locationX on the track itself: the fill
+  // and handle have pointerEvents="none", so the track is always the touch
+  // target, and its width comes from onLayout (correct after rotation).
+  // Screen-coordinate measuring (measureInWindow vs pageX) drifted in
+  // landscape and overshot seeks by minutes.
   const durationRef = useRef(duration);
   durationRef.current = duration;
   const onSeekRef = useRef(onSeek);
   onSeekRef.current = onSeek;
-  const trackRef = useRef<View>(null);
-  const track = useRef({x: 0, width: 1});
+  const trackWidth = useRef(1);
+  const [dragRatio, setDragRatio] = useState<number | null>(null);
 
-  const measureTrack = useCallback(() => {
-    trackRef.current?.measureInWindow((x, _y, width) => {
-      if (width > 0) {
-        track.current = {x, width};
-      }
-    });
-  }, []);
-
-  const ratioAt = (pageX: number) =>
-    Math.max(0, Math.min(1, (pageX - track.current.x) / track.current.width));
+  const ratioAt = (locationX: number) =>
+    Math.max(0, Math.min(1, locationX / trackWidth.current));
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: evt => {
         isSeeking.current = true;
-        seekTime.current = ratioAt(evt.nativeEvent.pageX) * durationRef.current;
+        const r = ratioAt(evt.nativeEvent.locationX);
+        seekTime.current = r * durationRef.current;
+        setDragRatio(r);
       },
       onPanResponderMove: evt => {
-        seekTime.current = ratioAt(evt.nativeEvent.pageX) * durationRef.current;
+        const r = ratioAt(evt.nativeEvent.locationX);
+        seekTime.current = r * durationRef.current;
+        setDragRatio(r);
       },
       onPanResponderRelease: () => {
         isSeeking.current = false;
+        setDragRatio(null);
         if (durationRef.current > 0) {
           onSeekRef.current(seekTime.current);
         }
+      },
+      onPanResponderTerminate: () => {
+        isSeeking.current = false;
+        setDragRatio(null);
       },
     }),
   ).current;
@@ -100,7 +109,9 @@ export function PlayerControls({
     setPlaybackRate(next);
   }, [playbackRate, setPlaybackRate]);
 
-  const progress = duration > 0 ? currentTime / duration : 0;
+  const progress =
+    dragRatio ?? (duration > 0 ? Math.min(1, currentTime / duration) : 0);
+  const shownTime = dragRatio !== null ? dragRatio * duration : currentTime;
 
   return (
     <View style={styles.container}>
@@ -115,25 +126,53 @@ export function PlayerControls({
 
       {/* Seek bar */}
       <View
-        ref={trackRef}
-        onLayout={measureTrack}
+        onLayout={e => {
+          trackWidth.current = Math.max(1, e.nativeEvent.layout.width);
+        }}
         style={styles.seekBarTrack}
         {...panResponder.panHandlers}>
-        <View style={[styles.seekBarFill, {width: `${progress * 100}%`}]} />
-        <View style={[styles.seekHandle, {left: `${progress * 100}%`}]} />
+        <View pointerEvents="none" style={styles.seekBarBg} />
+        <View
+          pointerEvents="none"
+          style={[styles.seekBarFill, {width: `${progress * 100}%`}]}
+        />
+        <View
+          pointerEvents="none"
+          style={[
+            styles.seekHandle,
+            dragRatio !== null && styles.seekHandleActive,
+            {left: `${progress * 100}%`},
+          ]}
+        />
       </View>
 
       {/* Time row */}
       <View style={styles.timeRow}>
-        <Text style={styles.timeText}>{formatTime(currentTime)}</Text>
-        <Text style={styles.timeText}>{formatTime(duration)}</Text>
+        <Text style={[styles.timeText, dragRatio !== null && styles.timeDrag]}>
+          {formatTime(shownTime)}
+        </Text>
+        <TouchableOpacity onPress={() => setShowRemaining(!showRemaining)}>
+          <Text style={styles.timeText}>
+            {showRemaining
+              ? `-${formatTime(Math.max(0, duration - shownTime))}`
+              : formatTime(duration)}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* Controls row */}
       <View style={styles.controlRow}>
-        {/* Play/Pause */}
+        {/* −15 s / Play-Pause / +15 s */}
+        <TouchableOpacity onPress={() => onSkip(-SKIP_SEC)} style={styles.btn}>
+          <Text style={styles.btnText}>⟲ {SKIP_SEC}</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity onPress={onTogglePlay} style={styles.btn}>
           <Text style={styles.btnText}>{isPaused ? '▶' : '⏸'}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={() => onSkip(SKIP_SEC)} style={styles.btn}>
+          <Text style={styles.btnText}>{SKIP_SEC} ⟳</Text>
         </TouchableOpacity>
 
         {/* Speed */}
@@ -168,6 +207,14 @@ const styles = StyleSheet.create({
     height: 36,
     justifyContent: 'center',
   },
+  seekBarBg: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+  },
   seekBarFill: {
     height: 3,
     backgroundColor: '#FFD700',
@@ -188,6 +235,14 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   timeText: {color: '#CCC', fontSize: 12},
+  timeDrag: {color: '#FFD700', fontWeight: '700'},
+  seekHandleActive: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    marginLeft: -10,
+    top: 8,
+  },
   controlRow: {
     flexDirection: 'row',
     alignItems: 'center',

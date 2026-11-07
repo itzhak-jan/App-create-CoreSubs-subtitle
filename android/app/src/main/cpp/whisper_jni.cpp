@@ -147,19 +147,10 @@ Java_com_coresubsapp_whisper_WhisperModule_nativeTranscribe(
     params.print_realtime   = false;
     params.print_progress   = false;
     params.print_timestamps = false;
-    // Whisper's encoder always processes a 30 s window (1500 frames), so an
-    // 8 s chunk costs as much as a 30 s one. For shorter audio, shrink the
-    // encoder context to the audio length (+ margin) — several times faster
-    // for the short first chunk after load/seek. Floor of 512 frames
-    // (~10 s): much smaller contexts degrade accuracy noticeably.
-    {
-        const float secs = static_cast<float>(pcm.size()) / 16000.0f;
-        if (secs < 28.0f) {
-            int ctx_frames = static_cast<int>(secs * 50.0f) + 64;
-            if (ctx_frames < 512) ctx_frames = 512;
-            if (ctx_frames < 1500) params.audio_ctx = ctx_frames;
-        }
-    }
+    // Note: shrinking audio_ctx for short chunks was tried and measured
+    // slower on-device (short contexts trigger decoder fallbacks), so the
+    // encoder always runs its full 30 s window — the pipeline therefore
+    // uses chunks close to 30 s instead.
     params.abort_callback           = abort_cb;
     params.abort_callback_user_data = nullptr;
 

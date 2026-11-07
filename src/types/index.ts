@@ -145,9 +145,11 @@ export interface PipelineConfig {
 
 // chunkDuration stays just under 30 s: whisper's encoder processes a fixed
 // 30 s window per call, so anything shorter wastes compute per second of
-// audio (measured on-device: ~18 s per call for 8 s and 20 s chunks alike).
+// audio. Measured on a Pixel 10 Pro XL with whisper small: a 28 s chunk
+// takes ~14.5 s, a 5 s chunk 17–22 s — so the first chunk after a seek is
+// full length too (short ones only cost more).
 export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
   chunkDuration: 28,
-  firstChunkDurationSec: 8,
+  firstChunkDurationSec: 28,
   bufferAheadSec: 90,
 };
