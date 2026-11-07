@@ -79,10 +79,10 @@ export const MANIFEST_URL =
 export const DEFAULT_MANIFEST: ModelManifest = {
   whisper: {
     family: 'whisper-ggml',
-    version: '1.0.0',
-    filename: 'ggml-base.en.bin',
-    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin',
-    sizeBytes: 147_964_211,
+    version: '2.0.0',
+    filename: 'ggml-small-q5_1.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin',
+    sizeBytes: 190_085_487,
     dir: 'models',
   },
   translator: {

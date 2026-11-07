@@ -5,7 +5,7 @@
  *
  * Downloads runtime assets described by the manifest (src/services/
  * ModelManifest.ts) to DocumentDirectory:
- *   1. Whisper STT model                (~148 MB)
+ *   1. Whisper STT model, multilingual small (~190 MB)
  *   2. Gemma translation model (~555 MB) — only for the optional 'llm'
  *      engine; the default ML Kit engine downloads its own small language packs
  *
