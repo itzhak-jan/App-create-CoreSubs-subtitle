@@ -2,7 +2,8 @@ import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
   StyleSheet,
   View,
-  TouchableWithoutFeedback,
+  Pressable,
+  I18nManager,
   StatusBar,
   Text,
   type GestureResponderEvent,
@@ -145,29 +146,32 @@ export function VideoPlayer(): React.JSX.Element | null {
         viewWidth.current = Math.max(1, e.nativeEvent.layout.width);
       }}>
       <StatusBar hidden />
-      <TouchableWithoutFeedback onPress={handleVideoPress}>
-        <Video
-          ref={videoRef}
-          source={{uri: meta.uri}}
-          style={styles.video}
-          paused={isPaused}
-          rate={playbackRate}
-          muted={isMuted}
-          volume={volume}
-          resizeMode="contain"
-          progressUpdateInterval={PROGRESS_INTERVAL_MS}
-          onProgress={handleProgress}
-          onLoad={handleLoad}
-          onError={e => {
-            console.error('[VideoPlayer] error:', e);
-            setLoadState('error');
-          }}
-          // Hardware decoder configuration for Pixel 10 Pro XL
-          // Prefers hardware-accelerated H.264/H.265 via MediaCodec
-          useTextureView={true}
-          ignoreSilentSwitch="ignore"
-        />
-      </TouchableWithoutFeedback>
+      <Video
+        ref={videoRef}
+        source={{uri: meta.uri}}
+        style={styles.video}
+        paused={isPaused}
+        rate={playbackRate}
+        muted={isMuted}
+        volume={volume}
+        resizeMode="contain"
+        progressUpdateInterval={PROGRESS_INTERVAL_MS}
+        onProgress={handleProgress}
+        onLoad={handleLoad}
+        onError={e => {
+          console.error('[VideoPlayer] error:', e);
+          setLoadState('error');
+        }}
+        // Hardware decoder configuration for Pixel 10 Pro XL
+        // Prefers hardware-accelerated H.264/H.265 via MediaCodec
+        useTextureView={true}
+        ignoreSilentSwitch="ignore"
+      />
+
+      {/* Tap layer above the video. Wrapping <Video> in a Touchable didn't
+          work: Video doesn't forward the responder props to its native
+          view, so taps on the picture never arrived. */}
+      <Pressable style={styles.tapLayer} onPress={handleVideoPress} />
 
       <SubtitleOverlay />
 
@@ -177,7 +181,11 @@ export function VideoPlayer(): React.JSX.Element | null {
           pointerEvents="none"
           style={[
             styles.skipFlash,
-            skipFlash.side === 'left' ? styles.skipLeft : styles.skipRight,
+            // Absolute left/right are mirrored by RN under an RTL locale;
+            // swap so the flash shows on the physical side that was tapped.
+            (skipFlash.side === 'left') !== I18nManager.isRTL
+              ? styles.skipLeft
+              : styles.skipRight,
           ]}>
           <Text style={styles.skipText}>
             {skipFlash.side === 'left' ? `⟲ ${SKIP_SEC}` : `${SKIP_SEC} ⟳`}
@@ -200,6 +208,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   video: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  tapLayer: {
     ...StyleSheet.absoluteFillObject,
   },
   skipFlash: {

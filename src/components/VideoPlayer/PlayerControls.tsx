@@ -195,6 +195,10 @@ export function PlayerControls({
 
 const styles = StyleSheet.create({
   container: {
+    // Video controls stay left-to-right even with a Hebrew/RTL phone
+    // locale: React Native auto-mirrors layout in RTL (the fill grew from
+    // the right) while touch math is physical, so taps landed mirrored.
+    direction: 'ltr',
     position: 'absolute',
     bottom: 0,
     left: 0,
