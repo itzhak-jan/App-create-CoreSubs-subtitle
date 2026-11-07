@@ -9,7 +9,8 @@ export interface SubtitleCue {
   endTime: number;
   /** Original transcribed text */
   originalText: string;
-  /** Translated Hebrew text */
+  /** Translated text in the target language. (Field name kept from when the
+   *  target was always Hebrew — it's whatever settings.targetLang is.) */
   hebrewText: string;
 }
 
@@ -19,6 +20,8 @@ export type ChunkStatus =
   | 'pending'
   | 'extracting'
   | 'transcribing'
+  /** Transcribed; waiting in the translation queue. */
+  | 'awaiting_translation'
   | 'translating'
   | 'ready'
   | 'error';
@@ -33,6 +36,10 @@ export interface AudioChunk {
   wavPath?: string;
   status: ChunkStatus;
   cues: SubtitleCue[];
+  /** Whisper output, held between the STT stage and the translation stage. */
+  segments?: WhisperSegment[];
+  /** Source language whisper used/detected for this chunk (ISO 639-1). */
+  language?: string;
   error?: string;
 }
 
@@ -72,7 +79,35 @@ export interface GlossaryEntry {
    *  adjectives) consistent across segments that refer back to them. */
   gender?: 'm' | 'f';
   category?: GlossaryCategory;
+  /** Where the entry came from. 'user' entries are never overwritten by
+   *  automatic detection/extraction. */
+  origin?: 'auto' | 'llm' | 'user';
 }
+
+// ─── Settings ────────────────────────────────────────────────────────────────
+
+/**
+ * 'mlkit' — Google ML Kit on-device translation: tiny per-language models
+ *           (~30 MB, downloaded once), milliseconds per sentence. Default.
+ * 'llm'   — Gemma via MediaPipe: slower, needs the 500 MB+ model, but can
+ *           follow glossary hints incl. grammatical gender.
+ */
+export type TranslationEngine = 'mlkit' | 'llm';
+
+export interface AppSettings {
+  engine: TranslationEngine;
+  /** ISO 639-1 target language, e.g. 'he'. */
+  targetLang: string;
+  /** ISO 639-1 source language, or 'auto' to let whisper detect it
+   *  (requires a multilingual whisper model — '.en' models are English-only). */
+  sourceLang: string;
+}
+
+export const DEFAULT_SETTINGS: AppSettings = {
+  engine: 'mlkit',
+  targetLang: 'he',
+  sourceLang: 'auto',
+};
 
 // ─── Video State ─────────────────────────────────────────────────────────────
 
@@ -87,13 +122,7 @@ export interface VideoMeta {
 
 // ─── Export ──────────────────────────────────────────────────────────────────
 
-export type ExportStatus =
-  | 'idle'
-  | 'generating_srt'
-  | 'encoding'
-  | 'saving'
-  | 'done'
-  | 'error';
+export type ExportStatus = 'idle' | 'encoding' | 'saving' | 'done' | 'error';
 
 export interface ExportState {
   status: ExportStatus;
@@ -105,16 +134,17 @@ export interface ExportState {
 // ─── Processing Pipeline ─────────────────────────────────────────────────────
 
 export interface PipelineConfig {
-  /** Duration of each audio chunk in seconds */
+  /** Duration of a regular audio chunk in seconds. */
   chunkDuration: number;
-  /** How many seconds ahead of playhead to maintain in the buffer */
+  /** Duration of the first chunk after load/seek — short, so the first
+   *  subtitle shows up within a few seconds. */
+  firstChunkDurationSec: number;
+  /** How many seconds ahead of the playhead the STT stage keeps transcribed. */
   bufferAheadSec: number;
-  /** Trigger re-fetch when buffer remaining drops below this (seconds) */
-  refetchThresholdSec: number;
 }
 
 export const DEFAULT_PIPELINE_CONFIG: PipelineConfig = {
-  chunkDuration: 60,
-  bufferAheadSec: 120,
-  refetchThresholdSec: 30,
+  chunkDuration: 20,
+  firstChunkDurationSec: 8,
+  bufferAheadSec: 90,
 };

@@ -13,10 +13,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  * mirror the C-language wrapper in whisper_jni.cpp.
  *
  * Hardware notes for Pixel 10 Pro XL:
- *  - whisper.cpp uses GGML which can dispatch to the Adreno GPU via
- *    Vulkan compute. Set WHISPER_USE_VULKAN=1 in whisper_jni.cpp params.
+ *  - whisper.cpp runs on the CPU (NEON) — no GPU backend is compiled in.
+ *    The translation stage uses the GPU, so the two stages don't compete.
  *  - Keep threads <= 4 to leave headroom for the MediaCodec decoder thread
  *    and reduce thermal pressure.
+ *  - Calls are serialized on a single-thread dispatcher: one whisper
+ *    context must never run two whisper_full() calls at once.
  */
 @ReactModule(name = WhisperModule.NAME)
 class WhisperModule(reactContext: ReactApplicationContext) :
@@ -35,12 +37,13 @@ class WhisperModule(reactContext: ReactApplicationContext) :
 
     // JNI declarations — implemented in whisper_jni.cpp
     private external fun nativeInit(modelPath: String, nThreads: Int): Long
-    private external fun nativeTranscribe(ctxPtr: Long, wavPath: String): String
+    private external fun nativeTranscribe(ctxPtr: Long, wavPath: String, language: String): String
     private external fun nativeAbort(ctxPtr: Long)
     private external fun nativeFree(ctxPtr: Long)
 
     private var ctxPtr: Long = 0L
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val scope = CoroutineScope(Dispatchers.Default.limitedParallelism(1) + SupervisorJob())
     private val abortFlag = AtomicBoolean(false)
 
     override fun getName(): String = NAME
@@ -64,7 +67,7 @@ class WhisperModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun transcribe(wavPath: String, promise: Promise) {
+    fun transcribe(wavPath: String, language: String, promise: Promise) {
         if (ctxPtr == 0L) {
             promise.reject("WHISPER_NOT_INIT", "Call init() before transcribe()")
             return
@@ -75,7 +78,7 @@ class WhisperModule(reactContext: ReactApplicationContext) :
             try {
                 // nativeTranscribe returns a JSON string:
                 // {"language":"en","segments":[{"t0":0,"t1":300,"text":"Hello"}]}
-                val json = nativeTranscribe(ctxPtr, wavPath)
+                val json = nativeTranscribe(ctxPtr, wavPath, language)
                 val result = parseWhisperJson(json)
                 promise.resolve(result)
             } catch (e: Exception) {

@@ -1,5 +1,13 @@
-import {FFmpegKit, ReturnCode} from 'ffmpeg-kit-react-native';
+import {NativeModules} from 'react-native';
 import RNFS from 'react-native-fs';
+
+const {AudioChunkExtractorModule} = NativeModules;
+
+if (!AudioChunkExtractorModule) {
+  console.warn(
+    '[ChunkExtractor] AudioChunkExtractorModule not found — native build required.',
+  );
+}
 
 const TEMP_DIR = `${RNFS.CachesDirectoryPath}/coresubs_chunks`;
 
@@ -11,8 +19,12 @@ export async function ensureTempDir(): Promise<void> {
 }
 
 /**
- * Extracts a mono 16 kHz WAV segment from the source video.
- * whisper.cpp requires 16-bit PCM 16 kHz mono audio.
+ * Extracts a mono 16 kHz 16-bit PCM WAV segment from the source video's
+ * audio track — whisper.cpp requires exactly this format.
+ *
+ * Backed by AudioChunkExtractorModule.kt (MediaExtractor/MediaCodec +
+ * Media3's ChannelMixingAudioProcessor/SonicAudioProcessor), not FFmpeg —
+ * see that file's header comment for why.
  *
  * Returns the path to the extracted WAV file.
  */
@@ -31,37 +43,22 @@ export async function extractChunk(
     await RNFS.unlink(outPath);
   }
 
-  // -ss before -i for fast stream seek; -t caps chunk duration
-  // -ar 16000 -ac 1 -c:a pcm_s16le satisfies whisper.cpp input requirements
-  //
-  // executeWithArguments (not execute(string)) — videoUri/outPath come from
-  // DocumentPicker's copyTo, which preserves the original filename, so a
-  // space in the source filename (e.g. "My Trip.mp4") would otherwise be
-  // split by execute()'s whitespace tokeniser and break the command.
-  const args = [
-    '-ss',
-    String(startSec),
-    '-i',
-    videoUri,
-    '-t',
-    String(durationSec),
-    '-ar',
-    '16000',
-    '-ac',
-    '1',
-    '-c:a',
-    'pcm_s16le',
-    '-vn',
-    outPath,
-  ];
-
-  const session = await FFmpegKit.executeWithArguments(args);
-  const rc = await session.getReturnCode();
-
-  if (!ReturnCode.isSuccess(rc)) {
-    const logs = await session.getAllLogsAsString();
+  if (!AudioChunkExtractorModule) {
     throw new Error(
-      `FFmpeg chunk extraction failed (chunk ${chunkIndex}): ${logs}`,
+      'AudioChunkExtractorModule not available — native build required.',
+    );
+  }
+
+  try {
+    await AudioChunkExtractorModule.extractChunk(
+      videoUri,
+      startSec,
+      durationSec,
+      outPath,
+    );
+  } catch (err) {
+    throw new Error(
+      `Chunk extraction failed (chunk ${chunkIndex}): ${String(err)}`,
     );
   }
 
@@ -79,4 +76,9 @@ export async function cleanAllChunks(): Promise<void> {
   if (await RNFS.exists(TEMP_DIR)) {
     await RNFS.unlink(TEMP_DIR);
   }
+}
+
+/** Abort any in-progress chunk extraction (called on seek). */
+export function abortChunkExtraction(): void {
+  AudioChunkExtractorModule?.abort();
 }

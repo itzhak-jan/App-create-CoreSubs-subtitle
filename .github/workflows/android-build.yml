@@ -1,14 +1,18 @@
 name: Android Release Build
 
 # ── Triggers ──────────────────────────────────────────────────────────────────
-# Runs automatically on pushes to main.
+# Runs automatically on pushes to main or to this feature branch (added the
+# latter after a push to the feature branch produced no automatic run at
+# all — a manual "Re-run" on an old failed run then silently re-ran a stale
+# commit instead of the latest fixes, which is exactly the kind of trap
+# this is meant to avoid).
 # Can also be triggered manually from the Actions tab (workflow_dispatch).
 # No model or font files are downloaded here — they are runtime-only assets
 # fetched by the app on first launch. The build artefact is therefore small
 # and the workflow completes quickly.
 on:
   push:
-    branches: [main]
+    branches: [main, claude/rn-video-player-subtitles-1wvb3q, "claude/**"]
   workflow_dispatch:
 
 # Cancel any in-progress run for the same branch to avoid queued builds
@@ -22,6 +26,10 @@ jobs:
     name: Build Release APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # contents: write is needed by the "Publish APK to GitHub Release" step
+    # below, which creates/updates a Release via the default GITHUB_TOKEN.
+    permissions:
+      contents: write
 
     steps:
       # ── Source ──────────────────────────────────────────────────────────────
@@ -52,8 +60,8 @@ jobs:
           ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager \
             "ndk;26.1.10909125" \
             "cmake;3.22.1" \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       # ── JS dependencies ─────────────────────────────────────────────────────
       # `npm ci` uses package-lock.json for reproducible installs and is
@@ -105,7 +113,23 @@ jobs:
       # We generate a throw-away keystore here — sufficient for CI artefacts.
       # For a production-distributed APK, replace this with GitHub Secrets
       # and a dedicated release keystore.
+      #
+      # Cached with a fixed key (not tied to any changing file) so every run
+      # reuses the SAME keystore once one exists, instead of a fresh random
+      # one every time. Android refuses to install an "update" over an
+      # existing install signed with a different key
+      # (INSTALL_FAILED_UPDATE_INCOMPATIBLE) — without this cache, every
+      # single CI build would need `adb uninstall` before `adb install`
+      # could reinstall it, instead of plain `adb install -r`.
+      - name: Restore cached debug keystore
+        id: cache-keystore
+        uses: actions/cache@v4
+        with:
+          path: android/app/debug.keystore
+          key: debug-keystore-v1
+
       - name: Generate debug keystore for signing
+        if: steps.cache-keystore.outputs.cache-hit != 'true'
         run: |
           keytool -genkeypair -v \
             -keystore android/app/debug.keystore \
@@ -134,6 +158,9 @@ jobs:
       # ── Artefact upload ──────────────────────────────────────────────────────
       # The APK is signed with the throw-away debug keystore generated above.
       # Kept for 14 days so testers can download it from the Actions tab.
+      # (Zipped, and the Actions tab is web-only — the GitHub Release below is
+      # the phone-friendly download path; this artifact upload stays as a
+      # per-commit paper trail.)
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
@@ -141,6 +168,34 @@ jobs:
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 14
+
+      # ── GitHub Release (phone-friendly download) ────────────────────────────
+      # The Actions artifact above is a zip and the official GitHub mobile app
+      # has no UI to download Actions artifacts at all — that's web-only.
+      # Release assets, on the other hand, download straight to the phone from
+      # the app's own Releases tab (no zip to extract). One rolling release
+      # per branch (tag "latest-<branch, slashes to dashes>") is overwritten on
+      # every successful build, so a single bookmarked link always has the
+      # newest APK instead of piling up a new Release per commit.
+      - name: Compute release tag
+        id: release_tag
+        run: echo "tag=latest-$(echo '${{ github.ref_name }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Publish APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: "CoreSubs — latest (${{ github.ref_name }})"
+          body: |
+            Automatically rebuilt and republished on every push to `${{ github.ref_name }}`.
+            Commit: ${{ github.sha }}
+
+            This is a CI build signed with a throw-away debug keystore, not a
+            production release. Runtime correctness (translation quality, audio
+            extraction, subtitle burn-in) has not been verified on a real device.
+          files: android/app/build/outputs/apk/release/app-release.apk
+          prerelease: true
+          make_latest: false
 
       # ── Build summary ────────────────────────────────────────────────────────
       - name: Write build summary

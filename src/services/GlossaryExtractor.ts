@@ -1,5 +1,6 @@
 import {NativeModules} from 'react-native';
 import type {GlossaryEntry, GlossaryCategory} from '../types';
+import {languageName} from './TranslationService';
 
 const {TranslatorModule} = NativeModules;
 
@@ -15,22 +16,33 @@ const VALID_CATEGORIES: GlossaryCategory[] = [
   'other',
 ];
 
-function buildExtractionPrompt(pairs: TranslatedPair[]): string {
+function buildExtractionPrompt(
+  pairs: TranslatedPair[],
+  src: string,
+  tgt: string,
+): string {
+  const S = languageName(src);
+  const T = languageName(tgt);
   const lines = pairs
     .filter(p => p.original.trim() && p.hebrew.trim())
-    .map((p, i) => `${i + 1}. EN: ${p.original}\n   HE: ${p.hebrew}`)
+    .map(
+      (p, i) =>
+        `${i + 1}. ${src.toUpperCase()}: ${
+          p.original
+        }\n   ${tgt.toUpperCase()}: ${p.hebrew}`,
+    )
     .join('\n');
 
   return (
     'You are building a running glossary for consistent subtitle translation ' +
-    'of a single video. Below are English sentences with their Hebrew ' +
+    `of a single video. Below are ${S} lines with their ${T} ` +
     'translation. Identify proper names, places, or fixed phrases (like a ' +
     'password or magic word that should never be re-translated differently) ' +
     'that should be reused identically for the rest of the video.\n\n' +
     `${lines}\n\n` +
     'Respond with ONLY a JSON array, no other text. Each item: ' +
-    '{"term": "<exact English term as it appears above>", ' +
-    '"hebrew": "<the Hebrew rendering to reuse>", ' +
+    `{"term": "<exact ${S} term as it appears above>", ` +
+    `"hebrew": "<the ${T} rendering to reuse>", ` +
     '"gender": "m" | "f" | null (only for people), ' +
     '"category": "person" | "place" | "phrase" | "other"}. ' +
     'If nothing is worth remembering, respond with: []'
@@ -46,13 +58,15 @@ function buildExtractionPrompt(pairs: TranslatedPair[]): string {
  */
 export async function extractGlossaryEntries(
   pairs: TranslatedPair[],
+  src: string,
+  tgt: string,
 ): Promise<GlossaryEntry[]> {
   if (!TranslatorModule || pairs.length === 0) {
     return [];
   }
 
   try {
-    const prompt = buildExtractionPrompt(pairs);
+    const prompt = buildExtractionPrompt(pairs, src, tgt);
     const [raw]: string[] = await TranslatorModule.generateBatch([prompt]);
     return parseGlossaryJson(raw ?? '');
   } catch (e) {
@@ -100,6 +114,7 @@ function parseGlossaryJson(raw: string): GlossaryEntry[] {
         category: VALID_CATEGORIES.includes(categoryRaw as GlossaryCategory)
           ? (categoryRaw as GlossaryCategory)
           : undefined,
+        origin: 'llm',
       });
     }
     return entries;

@@ -1,4 +1,4 @@
-import type {WhisperSegment, SubtitleCue} from '../types';
+import type {WhisperSegment, SubtitleCue, PipelineConfig} from '../types';
 
 /**
  * Converts whisper segments (chunk-relative offsets) into absolute media-time
@@ -49,15 +49,42 @@ export function findActiveCue(
   return null;
 }
 
-/** Returns the chunk index for a given media position and chunk duration. */
+/**
+ * Chunk boundaries are piecewise, not a uniform grid: chunk 0 is
+ * `firstChunkDurationSec` long (short, so the first subtitle appears fast),
+ * and every chunk after it is a full `chunkDuration`. These three helpers
+ * are the single source of truth for that boundary math — every caller
+ * (JITProcessor's scheduling, PlayerControls' status lookup) must go
+ * through them rather than re-deriving chunk boundaries itself.
+ */
 export function chunkIndexForTime(
   mediaSec: number,
-  chunkDuration: number,
+  config: Pick<PipelineConfig, 'chunkDuration' | 'firstChunkDurationSec'>,
 ): number {
-  return Math.floor(mediaSec / chunkDuration);
+  if (mediaSec < config.firstChunkDurationSec) {
+    return 0;
+  }
+  return (
+    1 +
+    Math.floor((mediaSec - config.firstChunkDurationSec) / config.chunkDuration)
+  );
 }
 
 /** Returns the start time (seconds) of a given chunk index. */
-export function chunkStartTime(index: number, chunkDuration: number): number {
-  return index * chunkDuration;
+export function chunkStartTime(
+  index: number,
+  config: Pick<PipelineConfig, 'chunkDuration' | 'firstChunkDurationSec'>,
+): number {
+  if (index <= 0) {
+    return 0;
+  }
+  return config.firstChunkDurationSec + (index - 1) * config.chunkDuration;
+}
+
+/** Returns the nominal duration (seconds) of a given chunk index. */
+export function chunkDurationForIndex(
+  index: number,
+  config: Pick<PipelineConfig, 'chunkDuration' | 'firstChunkDurationSec'>,
+): number {
+  return index <= 0 ? config.firstChunkDurationSec : config.chunkDuration;
 }

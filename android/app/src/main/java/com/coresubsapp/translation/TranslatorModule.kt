@@ -3,6 +3,7 @@ package com.coresubsapp.translation
 import com.facebook.react.bridge.*
 import com.facebook.react.module.annotations.ReactModule
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
+import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -10,7 +11,7 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * React Native bridge to Google's TranslateGemma-4B, run through the
+ * React Native bridge to a Gemma 3 instruct model, run through the
  * MediaPipe LLM Inference ("Task Genai") API. Deliberately thin: prompt
  * construction (translation prompts with glossary hints, glossary
  * extraction prompts) lives in TypeScript (TranslationService.ts,
@@ -21,36 +22,52 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Why this replaced a raw TFLite Interpreter + NLLB-200 approach: there is
  * no verified, stably-hosted NLLB-200 TFLite conversion — Meta only
  * publishes NLLB as PyTorch checkpoints, and the community conversions
- * found are CTranslate2/ONNX, not TFLite (see ModelManifest.ts). Google
- * officially publishes TranslateGemma as a LiteRT-converted .task bundle
- * under the `litert-community` org, ready for the LLM Inference API — no
- * custom tokenizer/encoder-decoder loop to hand-roll (the task handles
- * tokenisation internally), at the cost of a much larger download (a 4B
- * parameter model vs. NLLB's 600M).
+ * found are CTranslate2/ONNX, not TFLite (see ModelManifest.ts).
  *
- * UNVERIFIED — confirm before shipping (this session's sandbox couldn't
- * browse huggingface.co to check; see ModelManifest.ts header):
- *   - The exact filename/size of the Android-usable .task bundle under
- *     litert-community/TranslateGemma-4B-IT. Search results surfaced a
- *     "-web.task" variant for MediaPipe *web*, which is NOT this API —
- *     confirm there's a mobile/Android bundle before pointing the manifest
- *     at it.
- *   - Whether the download is gated behind a Gemma license acceptance /
- *     HuggingFace account. If so, an anonymous RNFS.downloadFile() won't
- *     work — either self-host a copy after accepting the license once
- *     yourself, or add an Authorization header (ManifestAsset would need
- *     an optional `headers` field; not implemented here since it's
- *     unneeded until the gating question is settled).
- *   - The model's official prompt/chat template for translation
- *     (google/translategemma-4b-it ships a chat_template.jinja) — the
- *     prompts built in TranslationService.ts are a reasonable
- *     instruction-style guess, not copied from that file. Mismatched
- *     formatting will still produce output, just with lower quality than
- *     the model is capable of.
+ * Model history: originally targeted TranslateGemma-4B (translation-
+ * specialized), but Google never published an Android/mobile .task or
+ * .litertlm bundle for it — only a "-web.task" (MediaPipe Web/Wasm,
+ * incompatible with this API), and the one community Android conversion
+ * found ships a different runtime (LiteRT-LM's .litertlm, not this app's
+ * MediaPipe Task Genai API) and has a reported GPU padding-only-output bug.
+ * Switched to litert-community/Gemma3-1B-IT — a general-purpose instruct
+ * model (not translation-specialized, so output quality depends on the
+ * prompt in TranslationService.ts rather than fine-tuning), whose README
+ * explicitly confirms Android + MediaPipe LLM Inference support in the same
+ * .task format this module already expects.
+ *
+ * CONFIRMED (real-device test): the huggingface.co URL 401s for anonymous
+ * downloads — litert-community/Gemma3-1B-IT is gated behind an accepted
+ * Gemma license via a logged-in HuggingFace account. Fixed by self-hosting:
+ * the .task file was downloaded once after accepting the license, then
+ * re-uploaded as a binary asset on this repo's own `models-v1` GitHub
+ * Release, which serves it over a plain unauthenticated URL — see
+ * ModelManifest.ts for the actual URL in use.
+ *
+ * Still open — not yet verified on-device:
+ *   - There's no official translation-specific prompt/chat template to
+ *     match here (Gemma3-1B-IT is general-purpose) — the prompts built in
+ *     TranslationService.ts are a reasonable instruction-style guess, not
+ *     copied from a translation-tuned template. Mismatched formatting will
+ *     still produce output, just with lower quality than a translation-
+ *     specialized model would give.
  *
  * Hardware notes for Pixel 10 Pro XL: the LLM Inference API dispatches to
  * GPU/NPU automatically where supported by the backend build; no manual
  * delegate wiring is needed here (unlike the old raw-TFLite module).
+ *
+ * Note: com.google.mediapipe.tasks.genai.llminference.LlmInference and
+ * LlmInferenceSession are both marked @Deprecated upstream in favour of
+ * LiteRT-LM as of this writing. Used anyway because it's still shipping and
+ * functional, and migrating to LiteRT-LM's separate API surface is a bigger
+ * change than this session verified time for — worth revisiting later.
+ * topK/temperature live on LlmInferenceSession, not LlmInference itself: the
+ * engine (LlmInference) only takes maxTopK as a ceiling that sessions can't
+ * exceed, so every generation call opens a short-lived session with the
+ * actual sampling params, generates once, and closes it — confirmed against
+ * the real source on GitHub (google-ai-edge/mediapipe) after an earlier
+ * version of this file (using setTopK/setTemperature directly on
+ * LlmInferenceOptions.Builder, which don't exist there) failed to compile.
  */
 @ReactModule(name = TranslatorModule.NAME)
 class TranslatorModule(reactContext: ReactApplicationContext) :
@@ -59,7 +76,12 @@ class TranslatorModule(reactContext: ReactApplicationContext) :
     companion object {
         const val NAME = "TranslatorModule"
 
-        private const val MAX_TOKENS = 512 // headroom for glossary-extraction JSON, not just short subtitle lines
+        // MediaPipe's maxTokens is the TOTAL context (prompt + output), and
+        // exceeding it is a native SIGSEGV, not an exception. Batched prompts
+        // (instructions + glossary + several lines) need more than 512, so use
+        // the full KV cache the bundle was built with ("_ekv2048" in the
+        // filename). TranslationService.ts also caps each batch's size.
+        private const val MAX_TOKENS = 2048
         private const val TOP_K = 40
         private const val TEMPERATURE = 0.3f // low — translation/extraction want fidelity, not creativity
     }
@@ -89,14 +111,23 @@ class TranslatorModule(reactContext: ReactApplicationContext) :
                     return@launch
                 }
 
-                val options = LlmInference.LlmInferenceOptions.builder()
-                    .setModelPath(modelPath)
-                    .setMaxTokens(MAX_TOKENS)
-                    .setTopK(TOP_K)
-                    .setTemperature(TEMPERATURE)
-                    .build()
+                fun build(backend: LlmInference.Backend) =
+                    LlmInference.LlmInferenceOptions.builder()
+                        .setModelPath(modelPath)
+                        .setMaxTokens(MAX_TOKENS)
+                        .setMaxTopK(TOP_K) // ceiling; the actual per-call topK is set on the session below
+                        .setPreferredBackend(backend)
+                        .build()
 
-                llmInference = LlmInference.createFromOptions(reactApplicationContext, options)
+                // Ask for the GPU explicitly (leaves the CPU to whisper, which
+                // runs at the same time); fall back to CPU if the GPU delegate
+                // can't load this bundle.
+                llmInference = try {
+                    LlmInference.createFromOptions(reactApplicationContext, build(LlmInference.Backend.GPU))
+                } catch (e: Exception) {
+                    android.util.Log.w(NAME, "GPU backend unavailable, using CPU: ${e.message}")
+                    LlmInference.createFromOptions(reactApplicationContext, build(LlmInference.Backend.CPU))
+                }
                 promise.resolve(null)
             } catch (e: Exception) {
                 promise.reject("TRANSLATOR_INIT_ERROR", e.message, e)
@@ -135,9 +166,7 @@ class TranslatorModule(reactContext: ReactApplicationContext) :
                     for (i in 0 until prompts.size()) {
                         if (abortFlag.get()) break
                         val prompt = prompts.getString(i) ?: ""
-                        batch.pushString(
-                            if (prompt.isBlank()) "" else engine.generateResponse(prompt).trim(),
-                        )
+                        batch.pushString(if (prompt.isBlank()) "" else generateOne(engine, prompt))
                     }
                     batch
                 }
@@ -161,5 +190,26 @@ class TranslatorModule(reactContext: ReactApplicationContext) :
         scope.cancel()
         llmInference?.close()
         llmInference = null
+    }
+
+    /**
+     * A short-lived LlmInferenceSession per prompt: session-level options
+     * are where topK/temperature actually live, and a fresh session avoids
+     * any risk of one prompt's conversational context (addQueryChunk)
+     * leaking into the next — each translation/extraction call here is
+     * independent, not a multi-turn conversation.
+     */
+    private fun generateOne(engine: LlmInference, prompt: String): String {
+        val sessionOptions = LlmInferenceSession.LlmInferenceSessionOptions.builder()
+            .setTopK(TOP_K)
+            .setTemperature(TEMPERATURE)
+            .build()
+        val session = LlmInferenceSession.createFromOptions(engine, sessionOptions)
+        try {
+            session.addQueryChunk(prompt)
+            return session.generateResponse().trim()
+        } finally {
+            session.close()
+        }
     }
 }

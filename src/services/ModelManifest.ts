@@ -17,20 +17,33 @@
  *      manifest we fetched successfully in this process, or — on the very
  *      first run — DEFAULT_MANIFEST below.
  *
- * IMPORTANT — the `translator` entry below is a placeholder, not a
- *   verified working download. It points at the right HuggingFace org
- *   (litert-community/TranslateGemma-4B-IT — a real, Google-published
- *   LiteRT conversion of TranslateGemma-4B, confirmed via web search to
- *   support Hebrew) but this session's sandbox could not browse
- *   huggingface.co (network egress policy) to confirm the exact Android
- *   .task filename, its real size, or whether the download is gated
- *   behind a Gemma license acceptance. Before relying on translation in
- *   production: open that HF page yourself, get the exact file, and update
- *   models-manifest.json's `translator.url`/`sizeBytes`/`version`. See
- *   TranslatorModule.kt's header comment for the full detail.
+ * `translator` history: originally pointed at TranslateGemma-4B, but Google
+ *   never published an Android/mobile .task or .litertlm bundle for it —
+ *   only a "-web.task" (MediaPipe Web/Wasm, incompatible with this app's
+ *   Android LlmInference API). The one community Android conversion found
+ *   (barakplasma/translategemma-4b-it-android-task-quantized) ships
+ *   .litertlm, a different runtime (LiteRT-LM, not the MediaPipe Task Genai
+ *   API this app uses) than what's implemented, and has a reported bug
+ *   returning padding-only output on GPU. Switched to
+ *   litert-community/Gemma3-1B-IT instead — a general-purpose instruct
+ *   model (not translation-specialized, so quality depends on the prompt
+ *   in TranslationService.ts rather than fine-tuning) whose README
+ *   explicitly confirms Android + MediaPipe LLM Inference support, in the
+ *   same .task format already used here.
+ *
+ *   The HuggingFace URL confirmed exactly the risk flagged earlier: it 401s
+ *   for anonymous requests — litert-community/Gemma3-1B-IT is gated behind
+ *   accepting Gemma's license via a logged-in HuggingFace account, so
+ *   RNFS.downloadFile() can never succeed against it directly. Fixed by
+ *   self-hosting: after accepting the license once in a browser, the .task
+ *   file was re-uploaded as a binary asset on this repo's own
+ *   `models-v1` GitHub Release, which serves it over a plain unauthenticated
+ *   URL. `url` below points there instead of huggingface.co now. Re-run the
+ *   same accept-license-then-reupload dance on this repo's Releases page if
+ *   the model is ever swapped again.
  */
 export interface ManifestAsset {
-  /** Model family, e.g. "whisper-ggml", "translategemma-4b", "rubik-font". Purely
+  /** Model family, e.g. "whisper-ggml", "translategemma-4b". Purely
    *  informational — lets a future manifest swap in a sibling checkpoint
    *  from the same family without the app needing to know the difference. */
   family: string;
@@ -41,13 +54,12 @@ export interface ManifestAsset {
   url: string;
   /** Minimum expected file size in bytes — used to detect corrupt/partial downloads. */
   sizeBytes: number;
-  dir: 'models' | 'fonts';
+  dir: 'models';
 }
 
 export interface ModelManifest {
   whisper: ManifestAsset;
   translator: ManifestAsset;
-  font: ManifestAsset;
 }
 
 export type ManifestKey = keyof ModelManifest;
@@ -74,26 +86,17 @@ export const DEFAULT_MANIFEST: ModelManifest = {
     dir: 'models',
   },
   translator: {
-    family: 'translategemma-4b',
-    version: '1.0.0',
-    filename: 'translategemma-4b-it.task',
-    // PLACEHOLDER — NOT VERIFIED. See file header: confirm the exact
-    // filename, size, and any license gating on huggingface.co/
-    // litert-community/TranslateGemma-4B-IT before shipping, then update
-    // this url/sizeBytes and bump version.
-    url: 'https://huggingface.co/litert-community/TranslateGemma-4B-IT/resolve/main/translategemma-4b-it.task',
-    // Rough estimate for a 4B-parameter model at ~4-bit quantization —
-    // unconfirmed. Replace with the real file size once known.
-    sizeBytes: 2_800_000_000,
+    family: 'gemma3-1b',
+    version: '2.1.0',
+    filename: 'Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task',
+    // Self-hosted — see file header for why: the original huggingface.co
+    // URL is gated behind an accepted Gemma license and 401s for anonymous
+    // downloads.
+    url: 'https://github.com/itzhak-jan/App-create-CoreSubs-subtitle/releases/download/models-v1/Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task',
+    // 529 MB as reported by GitHub Releases for the actual uploaded file;
+    // kept a little under that as a floor for the corrupt/partial-download check.
+    sizeBytes: 520_000_000,
     dir: 'models',
-  },
-  font: {
-    family: 'rubik-font',
-    version: '1.0.0',
-    filename: 'Rubik-Regular.ttf',
-    url: 'https://github.com/google/fonts/raw/main/ofl/rubik/Rubik-Regular.ttf',
-    sizeBytes: 138_000,
-    dir: 'fonts',
   },
 };
 
@@ -109,7 +112,7 @@ function isValidManifest(json: unknown): json is ModelManifest {
     return false;
   }
   const m = json as Partial<ModelManifest>;
-  return ['whisper', 'translator', 'font'].every(key => {
+  return ['whisper', 'translator'].every(key => {
     const asset = (m as Record<string, unknown>)[key] as
       | Partial<ManifestAsset>
       | undefined;
